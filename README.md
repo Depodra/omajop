@@ -16,7 +16,7 @@ selected note rendered on the right.
 omarchy plugin add https://github.com/renerocksai/omajop.git --enable
 ```
 
-That clones into `~/.config/omarchy/plugins/org.ren.omajop`, asks which bar
+That clones into `~/.config/omarchy/plugins/org.renerocksai.omajop`, asks which bar
 section to put it in (center by default), and rescans the shell itself — no
 restart needed.
 
@@ -26,11 +26,11 @@ It also needs `sqlite3`, which is how it reads the profile:
 omarchy pkg add sqlite
 ```
 
-Afterwards `omarchy plugin update org.ren.omajop` and
-`omarchy plugin remove org.ren.omajop` do what they say. To move it later:
+Afterwards `omarchy plugin update org.renerocksai.omajop` and
+`omarchy plugin remove org.renerocksai.omajop` do what they say. To move it later:
 
 ```bash
-omarchy bar move org.ren.omajop --section right
+omarchy bar move org.renerocksai.omajop --section right
 ```
 
 To hack on it instead of just running it, see [Development](#development).
@@ -74,7 +74,7 @@ below are what it uses when `shell.json` says nothing about it.
 To change one:
 
 ```bash
-omarchy bar set org.ren.omajop sortBy title
+omarchy bar set org.renerocksai.omajop sortBy title
 ```
 
 or edit the widget's entry in `~/.config/omarchy/shell.json` directly. Every
@@ -86,7 +86,7 @@ drift apart.
 ## IPC
 
 ```bash
-omarchy-shell org.ren.omajop open|close|toggle|refresh
+omarchy-shell org.renerocksai.omajop open|close|toggle|refresh
 ```
 
 ## How it works
@@ -207,8 +207,8 @@ To work on it, clone anywhere and symlink the checkout in under the plugin id:
 
 ```bash
 git clone https://github.com/renerocksai/omajop.git
-ln -s "$PWD/omajop" ~/.config/omarchy/plugins/org.ren.omajop
-omarchy bar put org.ren.omajop
+ln -s "$PWD/omajop" ~/.config/omarchy/plugins/org.renerocksai.omajop
+omarchy bar put org.renerocksai.omajop
 omarchy restart shell
 ```
 

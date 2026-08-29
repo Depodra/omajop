@@ -15,7 +15,7 @@ import "Model.mjs" as Model
 // "Open in Joplin" hands the note to the desktop app instead.
 BarWidget {
   id: root
-  moduleName: "org.ren.omajop"
+  moduleName: "org.renerocksai.omajop"
 
   // null lets the model own every default, so they are declared in one place.
   readonly property string profilePath: Model.normalizeProfilePath(setting("profilePath", null))
@@ -400,7 +400,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "org.ren.omajop"
+    target: "org.renerocksai.omajop"
 
     function refresh(): void { root.broadcast("refresh") }
     function toggle(): void { root.togglePanel() }
