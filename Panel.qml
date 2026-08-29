@@ -157,6 +157,14 @@ Panel {
     previewScroll.contentY = Math.max(0, Math.min(limit, target))
   }
 
+  // g and G jump to the ends. A single g rather than vim's gg, because no
+  // other command here is g-prefixed for it to be ambiguous with.
+  function scrollPreviewToEnd(bottom) {
+    if (!previewScroll) return
+    var limit = Math.max(0, previewScroll.contentHeight - previewScroll.height)
+    previewScroll.contentY = bottom ? limit : 0
+  }
+
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.barIdentity, direction)
@@ -206,6 +214,9 @@ Panel {
       onTextKey: function(text) {
         if (text === "d") root.scrollPreview(0.5)
         else if (text === "u") root.scrollPreview(-0.5)
+        else if (text === "g") root.scrollPreviewToEnd(false)
+        else if (text === "G") root.scrollPreviewToEnd(true)
+        else if (text === "q") root.close()
         else if (text === "r" || text === "R") root.refreshNow()
         else if (text === "/") searchField.forceActiveFocus()
       }

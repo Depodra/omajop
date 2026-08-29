@@ -113,10 +113,11 @@ omarchy restart shell
 | `↑` `↓` or `j` `k` | Move within the active column |
 | `←` `→` or `h` `l` | Switch between folders and notes |
 | `d` `u` | Scroll the preview half a pane down / up |
+| `g` `G` | Jump the preview to the top / bottom |
 | `Enter` | Open the selected note in Joplin |
 | `/` | Focus the filter |
 | `r` | Refresh |
-| `Esc` | Close |
+| `Esc` or `q` | Close |
 
 Double-clicking a note opens it in Joplin too.
 
