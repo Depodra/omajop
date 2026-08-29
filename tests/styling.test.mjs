@@ -96,3 +96,43 @@ test("styleMarkdown is re-entrant despite the shared regexes", () => {
   assert.equal(style(body), first)
   assert.equal(style(body), first)
 })
+
+// --- html notes (markup_language 2) -----------------------------------------
+
+const htmlOf = h => Model.styleHtml(h, OPTS)
+
+test("an html anchor gains the theme colour", () => {
+  assert.equal(htmlOf('<a href="x">t</a>'),
+    '<a href="x" style="color:#8bc9eb">t</a>')
+})
+
+test("an existing style attribute is appended to, not replaced", () => {
+  assert.equal(htmlOf('<a href="x" style="font-weight:bold">t</a>'),
+    '<a href="x" style="font-weight:bold;color:#8bc9eb">t</a>')
+})
+
+test("the panel colour wins over one the note carries", () => {
+  // A clipped page's link colour is picked for a white background.
+  const out = htmlOf("<a href='x' style='color:red;'>t</a>")
+  assert.ok(out.endsWith("color:#8bc9eb'>t</a>"), out)
+})
+
+test("single-quoted attributes keep their quoting", () => {
+  assert.ok(htmlOf("<a href='x'>t</a>").includes('style="color:#8bc9eb"'))
+})
+
+test("html code and pre are sized like the body text", () => {
+  assert.equal(htmlOf("<code>x</code>"), '<code style="font-size:11px">x</code>')
+  assert.equal(htmlOf('<pre class="c">y</pre>'), '<pre class="c" style="font-size:11px">y</pre>')
+})
+
+test("html with nothing to restyle is untouched", () => {
+  assert.equal(htmlOf("<p>plain <b>text</b></p>"), "<p>plain <b>text</b></p>")
+  assert.equal(Model.styleHtml("<a href='x'>t</a>", {}), "<a href='x'>t</a>")
+  assert.equal(Model.styleHtml(null, OPTS), "")
+})
+
+test("an anchor closing tag is not mistaken for an opening one", () => {
+  const out = htmlOf('<a href="x">t</a> and </a>')
+  assert.equal((out.match(/style="color/g) || []).length, 1)
+})

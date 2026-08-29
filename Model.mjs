@@ -250,16 +250,31 @@ export function notesForFolder(notes, folderId) {
   return out
 }
 
-export function filterNotes(notes, query) {
+// Title matching is instant and local. `matchedIds`, when supplied, carries the
+// ids that Joplin's full-text index matched on the body, and widens the result.
+export function filterNotes(notes, query, matchedIds) {
   const rows = Array.isArray(notes) ? notes : []
   const needle = String(query || "").trim().toLowerCase()
   if (needle === "") return rows.slice()
+  const matched = matchedIds || {}
   const out = []
   for (let i = 0; i < rows.length; i++) {
     const title = String(rows[i] && rows[i].title || "").toLowerCase()
-    if (title.indexOf(needle) !== -1) out.push(rows[i])
+    if (title.indexOf(needle) !== -1 || matched[String(rows[i] && rows[i].id || "")]) {
+      out.push(rows[i])
+    }
   }
   return out
+}
+
+export function idSet(rows) {
+  const set = {}
+  const list = Array.isArray(rows) ? rows : []
+  for (let i = 0; i < list.length; i++) {
+    const id = String(list[i] && list[i].id || "")
+    if (ID_RE.test(id)) set[id] = true
+  }
+  return set
 }
 
 export function findNote(notes, id) {
@@ -367,8 +382,15 @@ export function noteUrl(id) {
 
 export const RESOURCE_DIR = "resources"
 
-// Both the image (`!`-prefixed) and plain link forms, in one pass.
-const RESOURCE_REF_RE = /(!?)\[([^\]]*)\]\(:\/([0-9a-f]{32})\)/g
+// The Markdown image/link forms and the HTML <img> form, in one pass, so the
+// segments come out in document order. An HTML note (markup_language 2) embeds
+// an attachment as <img src=":/<id>">, which Qt would not paint either.
+const RESOURCE_REF_RE = new RegExp(
+  "(!?)\\[([^\\]]*)\\]\\(:\\/([0-9a-f]{32})\\)"
+  + "|<img\\b[^>]*?\\bsrc\\s*=\\s*[\"']:\\/([0-9a-f]{32})[\"'][^>]*>",
+  "gi")
+
+const ALT_RE = /\balt\s*=\s*["']([^"']*)["']/i
 
 export function resourcesSql() {
   return "SELECT id, mime, file_extension, title, encryption_applied"
@@ -429,14 +451,21 @@ export function splitBody(body, resources, profileDir) {
   RESOURCE_REF_RE.lastIndex = 0
   let match
   while ((match = RESOURCE_REF_RE.exec(source)) !== null) {
-    const [whole, bang, label, id] = match
+    const whole = match[0]
     buffer += source.slice(lastIndex, match.index)
     lastIndex = match.index + whole.length
 
-    const resource = map[id]
-    const isImage = bang === "!" && isImageResource(resource)
+    // Either the Markdown form (groups 1-3) or the HTML <img> form (group 4).
+    const html = match[4] !== undefined && match[4] !== null
+    const id = html ? match[4] : match[3]
+    const altMatch = html ? ALT_RE.exec(whole) : null
+    const label = html ? (altMatch ? altMatch[1] : "") : match[2]
+    // An <img> is always an embed; the Markdown form needs its leading `!`.
+    const wantsEmbed = html || match[1] === "!"
 
-    if (isImage) {
+    const resource = map[id]
+
+    if (wantsEmbed && isImageResource(resource)) {
       flush()
       segments.push({
         kind: "image",
@@ -567,4 +596,89 @@ export function styleMarkdown(markdown, options) {
   }
   out.push(styleProse(text.slice(last), color))
   return out.join("")
+}
+
+// --- full-text search -------------------------------------------------------
+//
+// Joplin maintains an FTS4 index (`notes_fts`) over note titles and bodies, so
+// searching bodies costs one more query rather than reading every note.
+//
+// FTS4 fails the *whole* query on a malformed MATCH expression — a bare `AND`,
+// an unbalanced quote, a stray `*` — so user input is reduced to plain terms.
+// Lowercasing is what makes that safe: FTS4 only treats AND/OR/NOT/NEAR as
+// operators in uppercase, so a lowercase term can never become one.
+
+export const MAX_SEARCH_RESULTS = 5000
+export const MAX_SEARCH_TERMS = 16
+
+// Quote and operator characters, removed rather than escaped.
+const FTS_STRIP_RE = /["'^*():\-]+/g
+
+export function ftsMatchExpression(text) {
+  const cleaned = String(text === undefined || text === null ? "" : text)
+    .replace(FTS_STRIP_RE, " ")
+  const tokens = cleaned.split(/\s+/)
+  const terms = []
+  for (let i = 0; i < tokens.length && terms.length < MAX_SEARCH_TERMS; i++) {
+    const term = tokens[i].toLowerCase()
+    // A trailing `*` prefix-matches, so a half-typed word still finds notes.
+    if (term !== "") terms.push(term + "*")
+  }
+  // Adjacent terms are an implicit AND in FTS4.
+  return terms.join(" ")
+}
+
+export function searchSql(expression) {
+  const expr = String(expression || "")
+  if (expr === "") throw new Error("refusing to run a search with no terms")
+  return "SELECT id FROM notes_fts WHERE notes_fts MATCH '"
+    + expr.replace(/'/g, "''") + "'"
+    + " LIMIT " + MAX_SEARCH_RESULTS + ";"
+}
+
+// --- html notes -------------------------------------------------------------
+//
+// A markup_language 2 note is handed to Text as RichText, which skips the
+// Markdown rewriting above — but Qt renders its anchors and code in exactly the
+// same untheme-aware way, so the same treatment is applied to the HTML directly.
+// The panel's colour wins over one the note carries: a clipped page's link
+// colour is chosen for a white background and is routinely illegible on a dark
+// one, and consistency between note types matters more here than honouring it.
+
+const ANCHOR_RE = /<a\b([^>]*?)(\/?)>/gi
+const CODE_OPEN_RE = /<(code|pre)\b([^>]*?)(\/?)>/gi
+
+function withStyle(attributes, declaration) {
+  const doubleQuoted = /(\bstyle\s*=\s*")([^"]*)(")/i
+  if (doubleQuoted.test(attributes)) {
+    return attributes.replace(doubleQuoted, function (whole, open, value, close) {
+      return open + value.replace(/;\s*$/, "") + ";" + declaration + close
+    })
+  }
+  const singleQuoted = /(\bstyle\s*=\s*')([^']*)(')/i
+  if (singleQuoted.test(attributes)) {
+    return attributes.replace(singleQuoted, function (whole, open, value, close) {
+      return open + value.replace(/;\s*$/, "") + ";" + declaration + close
+    })
+  }
+  return attributes + ' style="' + declaration + '"'
+}
+
+export function styleHtml(html, options) {
+  let text = String(html === undefined || html === null ? "" : html)
+  const settings = options || {}
+  const color = sanitizeColor(settings.linkColor)
+  const size = sanitizeFontSize(settings.fontSizePx)
+
+  if (color !== "") {
+    text = text.replace(ANCHOR_RE, function (whole, attributes, selfClosing) {
+      return "<a" + withStyle(attributes, "color:" + color) + selfClosing + ">"
+    })
+  }
+  if (size !== "") {
+    text = text.replace(CODE_OPEN_RE, function (whole, tag, attributes, selfClosing) {
+      return "<" + tag + withStyle(attributes, "font-size:" + size) + selfClosing + ">"
+    })
+  }
+  return text
 }

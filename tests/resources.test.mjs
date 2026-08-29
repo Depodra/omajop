@@ -84,3 +84,36 @@ test("splitBody is re-entrant despite the shared regex", () => {
   assert.equal(Model.splitBody(body, RESOURCES, DIR).length, 1)
   assert.equal(Model.splitBody(body, RESOURCES, DIR).length, 1)
 })
+
+test("an HTML <img> reference becomes an image segment too", () => {
+  // markup_language 2 notes embed attachments this way.
+  const segments = Model.splitBody(
+    'before <img src=":/' + IMG + '" alt="Diagram"> after', RESOURCES, DIR)
+  assert.deepEqual(segments.map(s => s.kind), ["text", "image", "text"])
+  assert.equal(segments[1].url, "file://" + DIR + "/resources/" + IMG + ".png")
+  assert.equal(segments[1].title, "Diagram")   // taken from alt=
+})
+
+test("an HTML <img> with single quotes and extra attributes is matched", () => {
+  const segments = Model.splitBody(
+    "<img width='40' src=':/" + IMG + "' class='x'>", RESOURCES, DIR)
+  assert.deepEqual(segments.map(s => s.kind), ["image"])
+})
+
+test("an HTML <img> with no alt falls back to the resource title", () => {
+  const segments = Model.splitBody('<img src=":/' + IMG + '">', RESOURCES, DIR)
+  assert.equal(segments[0].title, "WebClipper.png")
+})
+
+test("an HTML <img> pointing at a non-image resource is not embedded", () => {
+  const segments = Model.splitBody('<img src=":/' + PDF + '">', RESOURCES, DIR)
+  assert.deepEqual(segments.map(s => s.kind), ["text"])
+})
+
+test("markdown and HTML images in one body keep document order", () => {
+  const segments = Model.splitBody(
+    'a ![m](:/' + IMG + ') b <img src=":/' + IMG + '" alt="h"> c', RESOURCES, DIR)
+  assert.deepEqual(segments.map(s => s.kind), ["text", "image", "text", "image", "text"])
+  assert.equal(segments[1].title, "m")
+  assert.equal(segments[3].title, "h")
+})

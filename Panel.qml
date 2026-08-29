@@ -27,6 +27,7 @@ Panel {
 
   readonly property string bodyText: hostWidget ? hostWidget.bodyText : ""
   readonly property var bodySegments: hostWidget && hostWidget.bodySegments ? hostWidget.bodySegments : []
+  readonly property var bodyMatchIds: hostWidget && hostWidget.bodyMatchIds ? hostWidget.bodyMatchIds : ({})
   readonly property int bodyMarkup: hostWidget ? hostWidget.bodyMarkup : Model.MARKUP_MARKDOWN
   readonly property bool bodyEncrypted: hostWidget ? hostWidget.bodyEncrypted : false
   readonly property bool bodyTruncated: hostWidget ? hostWidget.bodyTruncated : false
@@ -77,7 +78,8 @@ Panel {
   }
 
   readonly property var visibleNotes:
-    Model.filterNotes(Model.notesForFolder(root.noteRows, root.selectedFolderId), root.query)
+    Model.filterNotes(Model.notesForFolder(root.noteRows, root.selectedFolderId),
+                      root.query, root.bodyMatchIds)
   readonly property var selectedNote: Model.findNote(root.visibleNotes, root.selectedNoteId)
   readonly property bool searching: root.query.trim() !== ""
 
@@ -184,7 +186,9 @@ Panel {
   onVisibleNotesChanged: Qt.callLater(root.reconcileSelection)
 
   onOpenedChanged: if (opened) {
-    query = ""
+    // Clear the field, not `query`: its onTextChanged is what keeps the two in
+    // step and tells the host to drop its body matches.
+    searchField.text = ""
     activePane = 1
     reconcileSelection()
   }
@@ -273,8 +277,12 @@ Panel {
           font.pixelSize: Style.font.caption
           horizontalPadding: Style.space(6)
           verticalPadding: Style.space(2)
-          placeholderText: "Filter…  /"
-          onTextChanged: root.query = text
+          placeholderText: "Search…  /"
+          onTextChanged: {
+            root.query = text
+            // Titles filter instantly; bodies come back from the FTS index.
+            if (root.hostWidget) root.hostWidget.setSearchQuery(text)
+          }
           // Escape hands the keyboard back to the panel rather than closing it.
           Keys.onEscapePressed: {
             text = ""
@@ -715,13 +723,15 @@ Panel {
                     width: parent.width
                     text: {
                       if (segment.isImage) return ""
-                      // An HTML note carries its own styling; only Markdown
-                      // needs its links rewritten.
-                      if (root.bodyMarkup === Model.MARKUP_HTML) return segment.modelData.text
-                      return Model.styleMarkdown(segment.modelData.text, {
+                      var styling = {
                         linkColor: root.linkColorHex,
                         fontSizePx: Style.font.bodySmall
-                      })
+                      }
+                      // Qt renders anchors and code the same untheme-aware way
+                      // in both formats; only the rewriting differs.
+                      return root.bodyMarkup === Model.MARKUP_HTML
+                        ? Model.styleHtml(segment.modelData.text, styling)
+                        : Model.styleMarkdown(segment.modelData.text, styling)
                     }
                     // Joplin stores Markdown (markup_language 1) or HTML (2).
                     textFormat: root.bodyMarkup === Model.MARKUP_HTML

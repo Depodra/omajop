@@ -33,8 +33,9 @@ the preview) hands the note to the desktop app over its registered
 
 ### Images
 
-Note bodies refer to attachments as `![alt](:/<32-hex-id>)`, with the bytes on
-disk at `<profile>/resources/<id>.<extension>`.
+Note bodies refer to attachments as `![alt](:/<32-hex-id>)` in Markdown, or
+`<img src=":/<id>">` in an HTML note. Both are handled. The bytes are on disk at
+`<profile>/resources/<id>.<extension>`.
 
 Rewriting those to `file://` URLs and handing the Markdown to a `Text` element
 does not work: **Qt's Markdown renderer reserves space for a `file://` image and
@@ -46,6 +47,20 @@ image to the pane width without upscaling a small one, which is what
 Links to non-image attachments stay inline in the Markdown, rewritten to
 `file://` so clicking one opens it with `xdg-open`. A reference whose resource
 row has gone degrades to a label rather than leaving a raw `:/id` in the text.
+
+### Search
+
+The filter matches **titles instantly and bodies through Joplin's own index**.
+Joplin maintains an FTS4 table, `notes_fts`, so searching bodies costs one extra
+query rather than reading every note. Body matches widen the title match; they
+never replace it, so the list stays responsive while the query is in flight.
+
+FTS4 fails the *whole* query on a malformed `MATCH` expression — a bare `AND`,
+an unbalanced quote, a stray `*` — so input is reduced to plain terms, each
+prefix-matched so a half-typed word still finds notes. Lowercasing is what makes
+that safe: FTS4 only treats `AND`/`OR`/`NOT`/`NEAR` as operators in uppercase, so
+a lowercase term can never become one. A profile whose schema predates
+`notes_fts` simply falls back to matching titles.
 
 ### Theme-aware text
 
@@ -62,6 +77,12 @@ around by rewriting the body as inline HTML (which, unlike a `file://` image,
   blockquote of per-line code spans: `<pre>` would be the obvious choice, but the
   importer treats it as inline and collapses the block onto the previous
   paragraph.
+
+An HTML note (`markup_language = 2`) is rendered as RichText, which skips the
+Markdown rewriting — but Qt renders *its* anchors and code exactly as badly, so
+the same treatment is applied to the HTML directly. The panel's link colour wins
+over one the note carries: a clipped page's colours are chosen for a white
+background and are routinely illegible on a dark one.
 
 Only a literal colour and a literal pixel size are allowed into a style
 attribute, and code content is escaped, so note text cannot inject markup.

@@ -34,6 +34,11 @@ BarWidget {
   property var folderTree: []
   // id -> {mime, extension, title}, used to resolve `:/<id>` refs in a body.
   property var resourceMap: ({})
+
+  // Ids whose *body* matched the current filter, from Joplin's FTS index.
+  // Titles are matched locally and instantly; this widens that result.
+  property string searchQuery: ""
+  property var bodyMatchIds: ({})
   property date now: new Date()
 
   // Body of the currently previewed note, fetched on demand.
@@ -193,6 +198,51 @@ BarWidget {
     }
   }
 
+  // --- full-text search -----------------------------------------------------
+
+  function setSearchQuery(text) {
+    var next = String(text || "")
+    if (next === searchQuery) return
+    searchQuery = next
+    if (Model.ftsMatchExpression(searchQuery) === "") {
+      searchDebounce.stop()
+      bodyMatchIds = ({})
+      return
+    }
+    // Typing should not spawn a subprocess per keystroke.
+    searchDebounce.restart()
+  }
+
+  function runSearch() {
+    if (dbState !== "ready") return
+    var expression = Model.ftsMatchExpression(searchQuery)
+    if (expression === "") {
+      bodyMatchIds = ({})
+      return
+    }
+    // A query is already in flight; come back once it has landed.
+    if (searchProcess.running) {
+      searchDebounce.restart()
+      return
+    }
+    searchProcess.command = Model.sqliteArgv(databasePath, Model.searchSql(expression))
+    searchProcess.running = true
+  }
+
+  function finishSearch(exitCode) {
+    // A profile whose schema predates notes_fts, or any other failure, simply
+    // leaves the filter matching titles only.
+    if (exitCode !== 0) {
+      bodyMatchIds = ({})
+      return
+    }
+    try {
+      bodyMatchIds = Model.idSet(Model.parseRows(searchStdout.text || ""))
+    } catch (error) {
+      bodyMatchIds = ({})
+    }
+  }
+
   function openInJoplin(id) {
     var url = Model.noteUrl(id)
     if (url === "") return
@@ -282,6 +332,19 @@ BarWidget {
     stdout: StdioCollector { id: notesStdout; waitForEnd: true }
     stderr: StdioCollector { id: notesStderr; waitForEnd: true }
     onExited: function(exitCode) { root.finishNotes(exitCode) }
+  }
+
+  Timer {
+    id: searchDebounce
+    interval: 180
+    onTriggered: root.runSearch()
+  }
+
+  Process {
+    id: searchProcess
+    running: false
+    stdout: StdioCollector { id: searchStdout; waitForEnd: true }
+    onExited: function(exitCode) { root.finishSearch(exitCode) }
   }
 
   Process {
