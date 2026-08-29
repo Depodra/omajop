@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "org.ren.omajop",
+  "name": "Omajop",
+  "version": "0.1.0",
+  "author": "renerocksai",
+  "license": "MIT",
+  "description": "Browse and preview your Joplin notes from the bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omajop",
+    "description": "A note icon in the bar; click for your Joplin folders, notes, and previews",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "profilePath": "",
+      "sortBy": "updated",
+      "refreshSeconds": 60
+    },
+    "schema": [
+      {
+        "key": "profilePath",
+        "type": "string",
+        "label": "Joplin profile directory",
+        "defaultValue": "",
+        "description": "Leave empty for ~/.config/joplin-desktop."
+      },
+      {
+        "key": "sortBy",
+        "type": "enum",
+        "label": "Sort notes by",
+        "options": [
+          "updated",
+          "title"
+        ],
+        "defaultValue": "updated"
+      },
+      {
+        "key": "refreshSeconds",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 60,
+        "description": "How often the note list is re-read from the database."
+      }
+    ]
+  }
+}

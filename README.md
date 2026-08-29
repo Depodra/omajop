@@ -1,0 +1,124 @@
+# omajop
+
+A Joplin notes browser for the [Omarchy](https://omarchy.org/) shell bar.
+
+A note icon sits in the bar. Click it and it expands into a Joplin-like view:
+your folders on the left, that folder's notes in the middle, the selected note
+rendered on the right.
+
+![omajop](assets/panel.png)
+
+## How it reads your notes
+
+omajop reads the Joplin desktop app's SQLite profile directly, read-only, via
+the `sqlite3` CLI. That is a deliberate choice over Joplin's Data API:
+
+- **The Data API only answers while Joplin desktop is running.** A bar widget is
+  up whenever your session is; the desktop app usually is not. An API-backed
+  widget would be blank most of the time.
+- **No service to enable, no token to manage.** The Web Clipper service stays off.
+- **Quickshell has no SQLite binding**, so either route means shelling out.
+  `sqlite3 -readonly -json` is less machinery than HTTP, not more.
+
+### The one hard rule: it never writes
+
+Joplin tracks local changes across `item_changes`, `sync_items`, and
+`deleted_items`. A direct `UPDATE` to `notes` bypasses all of it, so the edit
+would either never sync or be clobbered on the next pull. omajop opens the
+database `-readonly` and has no code path that writes.
+
+Editing is therefore delegated: **Open in Joplin** (`Enter`, or the button above
+the preview) hands the note to the desktop app over its registered
+`joplin://x-callback-url/openNote` URL scheme, starting it if it is not running.
+
+### Details that matter
+
+- Notes are filtered with `deleted_time = 0 AND is_conflict = 0`. The trash and
+  conflict copies live in the same table as ordinary notes.
+- Joplin writes with a rollback journal, not WAL, so a reader can meet a write
+  lock. Queries set `.timeout 3000` and wait rather than fail.
+- Bodies are plaintext at rest — Joplin applies end-to-end encryption at sync
+  time, not on disk. A note that *is* encrypted locally is labelled rather than
+  shown as ciphertext.
+- Preview bodies are capped at 20,000 characters in SQL, so the JSON is always a
+  complete document. A truncated preview says so.
+- The schema version is checked against the one this widget was written against
+  (53). A mismatch shows a notice; it is not fatal, since the columns read here
+  have been stable for a long time.
+
+## Install
+
+Requires `sqlite3` (`omarchy pkg add sqlite`) and a Joplin desktop profile.
+
+```bash
+git clone https://github.com/renerocksai/omajop.git
+ln -s "$PWD/omajop" ~/.config/omarchy/plugins/org.ren.omajop
+omarchy bar put org.ren.omajop
+omarchy restart shell
+```
+
+`omarchy bar put` places it in the center section by default; pass
+`--section left|center|right` to choose another.
+
+> Plugin code is reloaded on save, but if the plugin directory is a **symlink**
+> the watcher does not see writes to the real path. Use `omarchy restart shell`
+> after editing.
+
+## Using it
+
+| Action | |
+|---|---|
+| Click the bar icon | Open / close the panel |
+| Middle-click the bar icon | Refresh now |
+| `↑` `↓` | Move within the active column |
+| `←` `→` | Switch between folders and notes |
+| `Enter` | Open the selected note in Joplin |
+| `/` | Focus the filter |
+| `r` | Refresh |
+| `Esc` | Close |
+
+Double-clicking a note opens it in Joplin too.
+
+## Settings
+
+Set these on the widget's entry in `~/.config/omarchy/shell.json`, or with
+`omarchy bar set org.ren.omajop <key> <value>`.
+
+| Key | Default | |
+|---|---|---|
+| `profilePath` | `~/.config/joplin-desktop` | Joplin profile directory |
+| `sortBy` | `updated` | `updated` or `title` |
+| `refreshSeconds` | `60` | How often the note list is re-read |
+
+Every value is clamped in `Model.mjs` on the way in, because `shell.json` is
+hand-editable and the manifest schema is only a hint.
+
+## IPC
+
+```bash
+omarchy-shell org.ren.omajop open|close|toggle|refresh
+```
+
+## Development
+
+All SQL building, parsing, and formatting lives in `Model.mjs`, so it can be
+tested without a compositor:
+
+```bash
+npm test
+```
+
+Lint the QML against the shell's own components:
+
+```bash
+mkdir -p /tmp/qmlroot && ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
+qmllint -I /tmp/qmlroot BarWidget.qml Panel.qml
+```
+
+Remaining `unqualified` and `missing-property` warnings come from qmllint not
+resolving Quickshell's dynamic types inside delegates; the first-party plugins
+produce the same categories.
+
+## License
+
+MIT

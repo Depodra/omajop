@@ -1,0 +1,709 @@
+import QtQuick
+import Quickshell
+import qs.Commons
+import qs.Ui
+import "Model.mjs" as Model
+
+// omajop popup: folders on the left, that folder's notes in the middle, the
+// selected note rendered on the right. The host owns all data and every
+// process, so this file stays presentational.
+Panel {
+  id: root
+  moduleName: "org.ren.omajop"
+  manageIpc: false
+
+  property var anchorItem: null
+  property var hostWidget: null
+  readonly property var barIdentity: hostWidget || root
+
+  readonly property var folderTree: hostWidget && hostWidget.folderTree ? hostWidget.folderTree : []
+  readonly property var noteRows: hostWidget && hostWidget.noteRows ? hostWidget.noteRows : []
+  readonly property string hostState: hostWidget ? hostWidget.dbState : "checking"
+  readonly property string loadError: hostWidget ? hostWidget.loadError : ""
+  readonly property string schemaNotice: hostWidget ? hostWidget.schemaNotice : ""
+  readonly property bool loading: hostWidget ? hostWidget.loading : false
+  readonly property string databasePath: hostWidget ? hostWidget.databasePath : ""
+  property date now: hostWidget ? hostWidget.now : new Date()
+
+  readonly property string bodyText: hostWidget ? hostWidget.bodyText : ""
+  readonly property int bodyMarkup: hostWidget ? hostWidget.bodyMarkup : Model.MARKUP_MARKDOWN
+  readonly property bool bodyEncrypted: hostWidget ? hostWidget.bodyEncrypted : false
+  readonly property bool bodyTruncated: hostWidget ? hostWidget.bodyTruncated : false
+  readonly property bool bodyLoading: hostWidget ? hostWidget.bodyLoading : false
+  readonly property string bodyError: hostWidget ? hostWidget.bodyError : ""
+
+  property string selectedFolderId: Model.ALL_NOTES_ID
+  property string selectedNoteId: ""
+  property string query: ""
+  // 0 = folders, 1 = notes. Left/right moves between them.
+  property int activePane: 1
+
+  readonly property color contentForeground: bar ? bar.barForeground : Color.foreground
+  readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property color mutedForeground: Qt.darker(contentForeground, 1.5)
+
+  // "All notes" is a folder row like any other, with the empty id the model
+  // already treats as "no folder filter".
+  readonly property var folderItems: {
+    var items = [{
+      id: Model.ALL_NOTES_ID,
+      title: "All notes",
+      depth: 0,
+      noteCount: root.noteRows.length,
+      totalCount: root.noteRows.length,
+      isAll: true
+    }]
+    for (var i = 0; i < root.folderTree.length; i++) {
+      var folder = root.folderTree[i]
+      items.push({
+        id: folder.id,
+        title: folder.title,
+        depth: folder.depth,
+        noteCount: folder.noteCount,
+        totalCount: folder.totalCount,
+        isAll: false
+      })
+    }
+    return items
+  }
+
+  readonly property var visibleNotes:
+    Model.filterNotes(Model.notesForFolder(root.noteRows, root.selectedFolderId), root.query)
+  readonly property var selectedNote: Model.findNote(root.visibleNotes, root.selectedNoteId)
+  readonly property bool searching: root.query.trim() !== ""
+
+  // --- selection ------------------------------------------------------------
+
+  function indexOfFolder(id) {
+    for (var i = 0; i < folderItems.length; i++) {
+      if (folderItems[i].id === id) return i
+    }
+    return 0
+  }
+
+  function indexOfNote(id) {
+    for (var i = 0; i < visibleNotes.length; i++) {
+      if (String(visibleNotes[i].id) === id) return i
+    }
+    return -1
+  }
+
+  function selectFolder(id) {
+    selectedFolderId = String(id || "")
+    // The previous note is unlikely to be in the new folder; land on its first.
+    selectFirstNote()
+  }
+
+  function selectFirstNote() {
+    selectNote(visibleNotes.length > 0 ? String(visibleNotes[0].id) : "")
+  }
+
+  function selectNote(id) {
+    selectedNoteId = String(id || "")
+    if (hostWidget) hostWidget.loadBody(selectedNoteId)
+  }
+
+  function moveFolderSelection(delta) {
+    if (folderItems.length === 0) return
+    var next = indexOfFolder(selectedFolderId) + delta
+    next = Math.max(0, Math.min(folderItems.length - 1, next))
+    selectFolder(folderItems[next].id)
+  }
+
+  function moveNoteSelection(delta) {
+    if (visibleNotes.length === 0) return
+    var current = indexOfNote(selectedNoteId)
+    var next = current < 0 ? 0 : current + delta
+    next = Math.max(0, Math.min(visibleNotes.length - 1, next))
+    selectNote(String(visibleNotes[next].id))
+  }
+
+  function movePane(delta) {
+    activePane = Math.max(0, Math.min(1, activePane + delta))
+  }
+
+  function moveSelection(delta) {
+    if (activePane === 0) moveFolderSelection(delta)
+    else moveNoteSelection(delta)
+  }
+
+  function openSelected() {
+    if (!hostWidget || selectedNoteId === "") return
+    hostWidget.openInJoplin(selectedNoteId)
+    root.close()
+  }
+
+  function refreshNow() {
+    if (hostWidget) hostWidget.refresh()
+  }
+
+  function switchPanel(direction) {
+    if (root.bar && typeof root.bar.switchPanelFrom === "function")
+      return root.bar.switchPanelFrom(root.barIdentity, direction)
+    return false
+  }
+
+  // The note list changes shape when the folder, filter, or data changes; keep
+  // the selection on a row that still exists.
+  function reconcileSelection() {
+    if (visibleNotes.length === 0) {
+      if (selectedNoteId !== "") selectNote("")
+      return
+    }
+    if (indexOfNote(selectedNoteId) < 0) selectFirstNote()
+  }
+
+  onVisibleNotesChanged: Qt.callLater(root.reconcileSelection)
+
+  onOpenedChanged: if (opened) {
+    query = ""
+    activePane = 1
+    reconcileSelection()
+  }
+
+  KeyboardPanel {
+    id: panel
+    anchorItem: root.anchorItem
+    owner: root.barIdentity
+    bar: root.bar
+    open: root.opened
+    focusTarget: keyCatcher
+    contentWidth: panel.fittedContentWidth(Style.space(940))
+    contentHeight: panel.fittedContentHeight(Style.space(560))
+
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      onMoveRequested: function(dx, dy) {
+        if (dx !== 0) root.movePane(dx)
+        if (dy !== 0) root.moveSelection(dy)
+      }
+      onActivateRequested: root.openSelected()
+      onCloseRequested: root.close()
+      onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTextKey: function(text) {
+        if (text === "r" || text === "R") root.refreshNow()
+        else if (text === "/") searchField.forceActiveFocus()
+      }
+
+      // --- header -----------------------------------------------------------
+
+      Item {
+        id: header
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: Math.max(headingLabel.height, searchField.height, refreshButton.height)
+
+        Text {
+          id: headingLabel
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          text: "JOPLIN"
+          color: root.mutedForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+          font.letterSpacing: 1.2
+          font.bold: true
+        }
+
+        Text {
+          id: countLabel
+          anchors.left: headingLabel.right
+          anchors.leftMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          text: {
+            if (root.hostState === "checking") return "Loading…"
+            if (root.hostState === "no-sqlite") return "sqlite3 missing"
+            if (root.hostState === "no-database") return "No profile"
+            if (root.loading) return "Reading…"
+            var total = root.noteRows.length
+            return total + (total === 1 ? " note" : " notes")
+          }
+          color: root.mutedForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        TextField {
+          id: searchField
+          anchors.right: refreshButton.left
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.space(150)
+          visible: root.hostState === "ready"
+          foreground: root.contentForeground
+          // Sized to sit inside the caption-height header rather than set it.
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+          horizontalPadding: Style.space(6)
+          verticalPadding: Style.space(2)
+          placeholderText: "Filter…  /"
+          onTextChanged: root.query = text
+          // Escape hands the keyboard back to the panel rather than closing it.
+          Keys.onEscapePressed: {
+            text = ""
+            keyCatcher.forceActiveFocus()
+          }
+        }
+
+        PanelActionButton {
+          id: refreshButton
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: ""
+          tooltipText: root.loading ? "Reading notes…" : "Refresh  ·  r"
+          foreground: root.contentForeground
+          fontFamily: root.contentFontFamily
+          enabled: !root.loading
+          opacity: root.loading ? 0.6 : 1.0
+          onClicked: root.refreshNow()
+
+          Text {
+            anchors.centerIn: parent
+            text: ""
+            color: refreshButton.foreground
+            font.family: refreshButton.fontFamily
+            font.pixelSize: refreshButton.fontSize
+
+            RotationAnimation on rotation {
+              from: 0
+              to: 360
+              duration: 900
+              loops: Animation.Infinite
+              running: root.loading
+            }
+
+            onRotationChanged: if (!root.loading && rotation !== 0) rotation = 0
+          }
+        }
+      }
+
+      // --- notices ----------------------------------------------------------
+
+      Column {
+        id: notices
+        anchors.top: header.bottom
+        anchors.topMargin: visibleNotice ? Style.space(10) : 0
+        anchors.left: parent.left
+        anchors.right: parent.right
+        spacing: Style.space(6)
+
+        readonly property bool visibleNotice: problemText !== "" || root.schemaNotice !== ""
+        readonly property string problemText: {
+          if (root.hostState === "no-sqlite" || root.hostState === "no-database") return root.loadError
+          return root.loadError
+        }
+
+        BorderSurface {
+          width: parent.width
+          visible: notices.problemText !== ""
+          height: visible ? problemLabel.implicitHeight + Style.space(16) : 0
+          radius: Style.cornerRadius
+          color: Style.normalFillFor(root.contentForeground, Color.urgent)
+          borderSpec: Border.controlSpec("normal", root.contentForeground, Color.urgent)
+
+          Text {
+            id: problemLabel
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: Style.space(8)
+            text: notices.problemText
+            textFormat: Text.PlainText
+            color: Color.urgent
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+        }
+
+        Text {
+          width: parent.width
+          visible: root.schemaNotice !== ""
+          text: root.schemaNotice
+          textFormat: Text.PlainText
+          color: root.mutedForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+      }
+
+      // --- panes ------------------------------------------------------------
+
+      Item {
+        id: panes
+        anchors.top: notices.bottom
+        anchors.topMargin: Style.space(10)
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        visible: root.hostState === "ready"
+
+        readonly property int folderWidth: Style.space(190)
+        readonly property int noteWidth: Style.space(250)
+
+        // Folders
+        ListView {
+          id: folderList
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          anchors.left: parent.left
+          width: panes.folderWidth
+          clip: true
+          model: root.folderItems
+          spacing: Style.space(1)
+          boundsBehavior: Flickable.StopAtBounds
+          currentIndex: root.indexOfFolder(root.selectedFolderId)
+          onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+
+          delegate: Rectangle {
+            id: folderRow
+            required property var modelData
+            required property int index
+
+            width: folderList.width
+            height: Style.space(26)
+            radius: Style.cornerRadius
+            color: {
+              if (folderRow.modelData.id === root.selectedFolderId)
+                return Style.selectedFillFor(root.contentForeground, Color.accent)
+              if (folderMouse.containsMouse)
+                return Style.hoverFillFor(root.contentForeground, Color.accent)
+              return "transparent"
+            }
+
+            Text {
+              id: folderGlyph
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6) + folderRow.modelData.depth * Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              text: folderRow.modelData.isAll
+                ? ""
+                : (folderRow.modelData.id === root.selectedFolderId ? "" : "")
+              color: folderRow.modelData.id === root.selectedFolderId
+                ? root.contentForeground : root.mutedForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              anchors.left: folderGlyph.right
+              anchors.leftMargin: Style.space(6)
+              anchors.right: folderCount.left
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              text: folderRow.modelData.title
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              color: folderRow.modelData.id === root.selectedFolderId
+                ? root.contentForeground : Qt.darker(root.contentForeground, 1.2)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              id: folderCount
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              text: folderRow.modelData.totalCount > 0 ? String(folderRow.modelData.totalCount) : ""
+              color: root.mutedForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: folderMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              onClicked: {
+                root.activePane = 0
+                root.selectFolder(folderRow.modelData.id)
+              }
+            }
+          }
+        }
+
+        PanelSeparator {
+          id: firstSeparator
+          anchors.left: folderList.right
+          anchors.leftMargin: Style.space(8)
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          width: 1
+          foreground: root.contentForeground
+        }
+
+        // Notes in the selected folder
+        ListView {
+          id: noteList
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          anchors.left: firstSeparator.right
+          anchors.leftMargin: Style.space(8)
+          width: panes.noteWidth
+          clip: true
+          model: root.visibleNotes
+          spacing: Style.space(1)
+          boundsBehavior: Flickable.StopAtBounds
+          currentIndex: root.indexOfNote(root.selectedNoteId)
+          onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+
+          delegate: Rectangle {
+            id: noteRow
+            required property var modelData
+            required property int index
+
+            readonly property string noteId: String(noteRow.modelData.id)
+            readonly property string todo: Model.todoState(noteRow.modelData)
+
+            width: noteList.width
+            height: Style.space(38)
+            radius: Style.cornerRadius
+            color: {
+              if (noteRow.noteId === root.selectedNoteId)
+                return Style.selectedFillFor(root.contentForeground, Color.accent)
+              if (noteMouse.containsMouse)
+                return Style.hoverFillFor(root.contentForeground, Color.accent)
+              return "transparent"
+            }
+
+            Text {
+              id: noteGlyph
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              text: noteRow.todo === "done"
+                ? ""
+                : (noteRow.todo === "open" ? "" : "")
+              color: noteRow.todo === "done" ? root.mutedForeground : root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              id: noteTitleLabel
+              anchors.left: noteGlyph.right
+              anchors.leftMargin: Style.space(6)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.top: parent.top
+              anchors.topMargin: Style.space(5)
+              text: Model.noteTitle(noteRow.modelData)
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              color: noteRow.todo === "done" ? root.mutedForeground : root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.strikeout: noteRow.todo === "done"
+            }
+
+            Text {
+              anchors.left: noteTitleLabel.left
+              anchors.right: noteTitleLabel.right
+              anchors.top: noteTitleLabel.bottom
+              anchors.topMargin: Style.space(2)
+              text: Model.formatUpdated(noteRow.modelData.updated_time, root.now)
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              color: root.mutedForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: noteMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              acceptedButtons: Qt.LeftButton
+              onClicked: {
+                root.activePane = 1
+                root.selectNote(noteRow.noteId)
+              }
+              onDoubleClicked: {
+                root.selectNote(noteRow.noteId)
+                root.openSelected()
+              }
+            }
+          }
+
+          Text {
+            anchors.centerIn: parent
+            visible: noteList.count === 0
+            text: root.searching ? "No match" : "No notes here"
+            color: root.mutedForeground
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+        }
+
+        PanelSeparator {
+          id: secondSeparator
+          anchors.left: noteList.right
+          anchors.leftMargin: Style.space(8)
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          width: 1
+          foreground: root.contentForeground
+        }
+
+        // Preview of the selected note
+        Item {
+          id: preview
+          anchors.left: secondSeparator.right
+          anchors.leftMargin: Style.space(10)
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+
+          Text {
+            id: previewTitle
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: openButton.left
+            anchors.rightMargin: Style.space(8)
+            text: root.selectedNote ? Model.noteTitle(root.selectedNote) : ""
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: root.contentForeground
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+          }
+
+          Text {
+            id: previewMeta
+            anchors.top: previewTitle.bottom
+            anchors.topMargin: Style.space(2)
+            anchors.left: parent.left
+            anchors.right: openButton.left
+            anchors.rightMargin: Style.space(8)
+            visible: root.selectedNote !== null
+            text: {
+              if (!root.selectedNote) return ""
+              var parts = [Model.formatUpdated(root.selectedNote.updated_time, root.now)]
+              if (root.bodyTruncated) parts.push("preview truncated")
+              return parts.join("  ·  ")
+            }
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: root.mutedForeground
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          PanelActionButton {
+            id: openButton
+            anchors.top: parent.top
+            anchors.right: parent.right
+            iconText: ""
+            tooltipText: "Open in Joplin  ·  Enter"
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+            visible: root.selectedNote !== null
+            onClicked: root.openSelected()
+          }
+
+          PanelSeparator {
+            id: previewRule
+            anchors.top: previewMeta.visible ? previewMeta.bottom : previewTitle.bottom
+            anchors.topMargin: Style.space(8)
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 1
+            visible: root.selectedNote !== null
+            foreground: root.contentForeground
+          }
+
+          Flickable {
+            id: previewScroll
+            anchors.top: previewRule.bottom
+            anchors.topMargin: Style.space(8)
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            contentWidth: width
+            contentHeight: previewBody.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+
+            // Reading a new note should start at the top of it.
+            onContentHeightChanged: contentY = 0
+
+            Text {
+              id: previewBody
+              width: previewScroll.width
+              text: {
+                if (root.bodyError !== "") return root.bodyError
+                if (root.bodyEncrypted) return "This note is still encrypted locally."
+                if (root.bodyLoading && root.bodyText === "") return "Loading…"
+                if (!root.selectedNote) return ""
+                return root.bodyText
+              }
+              // Joplin stores Markdown (markup_language 1) or HTML (2).
+              textFormat: {
+                if (root.bodyError !== "" || root.bodyEncrypted) return Text.PlainText
+                return root.bodyMarkup === Model.MARKUP_HTML ? Text.RichText : Text.MarkdownText
+              }
+              color: root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+              // Rendered note bodies are data, not navigation.
+              onLinkActivated: function(link) { Quickshell.execDetached(["xdg-open", link]) }
+            }
+          }
+
+          Text {
+            anchors.centerIn: parent
+            visible: root.selectedNote === null
+            text: root.noteRows.length === 0 ? "No notes in this profile" : "Select a note"
+            color: root.mutedForeground
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+        }
+      }
+
+      // --- empty states -----------------------------------------------------
+
+      Column {
+        anchors.centerIn: parent
+        width: Math.min(parent.width, Style.space(420))
+        spacing: Style.space(8)
+        visible: root.hostState !== "ready"
+
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          text: {
+            if (root.hostState === "checking") return "Looking for sqlite3…"
+            if (root.hostState === "no-sqlite") return "sqlite3 is required"
+            return "No Joplin profile found"
+          }
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.subtitle
+          font.bold: true
+        }
+
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          visible: root.hostState === "no-sqlite" || root.hostState === "no-database"
+          text: root.hostState === "no-sqlite"
+            ? "omajop reads your notes with the sqlite3 CLI.\nInstall it with:  omarchy pkg add sqlite"
+            : "Expected a Joplin desktop profile at:\n" + root.databasePath
+          textFormat: Text.PlainText
+          color: root.mutedForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+      }
+    }
+  }
+}
