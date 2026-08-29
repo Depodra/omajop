@@ -31,6 +31,46 @@ Editing is therefore delegated: **Open in Joplin** (`Enter`, or the button above
 the preview) hands the note to the desktop app over its registered
 `joplin://x-callback-url/openNote` URL scheme, starting it if it is not running.
 
+### Images
+
+Note bodies refer to attachments as `![alt](:/<32-hex-id>)`, with the bytes on
+disk at `<profile>/resources/<id>.<extension>`.
+
+Rewriting those to `file://` URLs and handing the Markdown to a `Text` element
+does not work: **Qt's Markdown renderer reserves space for a `file://` image and
+then paints nothing.** So omajop splits a body into segments — prose and images —
+and renders each image with a real `Image` element. That also lets it bound an
+image to the pane width without upscaling a small one, which is what
+`sourceSize` would do if you used it as a cap.
+
+Links to non-image attachments stay inline in the Markdown, rewritten to
+`file://` so clicking one opens it with `xdg-open`. A reference whose resource
+row has gone degrades to a label rather than leaving a raw `:/id` in the text.
+
+### Theme-aware text
+
+Two things Qt's Markdown importer gets wrong inside a themed panel, both worked
+around by rewriting the body as inline HTML (which, unlike a `file://` image,
+*does* survive the importer):
+
+- **Links.** It bakes a near-black blue into the character format, and
+  `Text.linkColor` does not override it — ask for a red link and you still get
+  blue. Links are rewritten as `<a style="color:…">` carrying the theme accent.
+- **Code.** Inline spans and fenced blocks are drawn with the system fixed font
+  at *its* point size rather than the item's, so they tower over the surrounding
+  text. Both are rewritten with an explicit `font-size`. A fenced block becomes a
+  blockquote of per-line code spans: `<pre>` would be the obvious choice, but the
+  importer treats it as inline and collapses the block onto the previous
+  paragraph.
+
+Only a literal colour and a literal pixel size are allowed into a style
+attribute, and code content is escaped, so note text cannot inject markup.
+Links inside code stay literal.
+
+Known limitation: Markdown **table borders** still use Qt's default colour
+rather than the theme's. Fixing that would mean converting tables to styled
+HTML, which is a lot of parsing for a thin gain on a dark theme.
+
 ### Details that matter
 
 - Notes are filtered with `deleted_time = 0 AND is_conflict = 0`. The trash and
@@ -70,8 +110,8 @@ omarchy restart shell
 |---|---|
 | Click the bar icon | Open / close the panel |
 | Middle-click the bar icon | Refresh now |
-| `↑` `↓` | Move within the active column |
-| `←` `→` | Switch between folders and notes |
+| `↑` `↓` or `j` `k` | Move within the active column |
+| `←` `→` or `h` `l` | Switch between folders and notes |
 | `Enter` | Open the selected note in Joplin |
 | `/` | Focus the filter |
 | `r` | Refresh |

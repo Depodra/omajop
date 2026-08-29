@@ -69,12 +69,16 @@ function stripTrailingSlash(path) {
 }
 
 // A configured profilePath points at the profile directory, not the file.
-export function databasePath(home, profilePath) {
+export function profileDirectory(home, profilePath) {
   const configured = normalizeProfilePath(profilePath)
   const dir = configured !== ""
     ? expandHome(configured, home)
     : String(home || "") + "/" + DEFAULT_PROFILE_DIR
-  return stripTrailingSlash(dir) + "/" + DB_FILENAME
+  return stripTrailingSlash(dir)
+}
+
+export function databasePath(home, profilePath) {
+  return profileDirectory(home, profilePath) + "/" + DB_FILENAME
 }
 
 // --- sqlite3 invocation -----------------------------------------------------
@@ -348,4 +352,219 @@ export function noteUrl(id) {
   const noteId = String(id || "")
   if (!ID_RE.test(noteId)) return ""
   return "joplin://x-callback-url/openNote?id=" + noteId
+}
+
+// --- resources --------------------------------------------------------------
+//
+// Joplin keeps attachments in the `resources` table and the bytes on disk at
+// <profile>/resources/<id>.<file_extension>. A note body refers to one as
+// `![alt](:/<id>)` for an image, or `[label](:/<id>)` for any other file.
+//
+// Qt's Markdown renderer does not paint file:// images — it reserves the space
+// and draws nothing — so image references are lifted out of the Markdown here
+// and handed to the panel as separate segments it can render with real Image
+// elements. That also lets the panel bound them to the pane width.
+
+export const RESOURCE_DIR = "resources"
+
+// Both the image (`!`-prefixed) and plain link forms, in one pass.
+const RESOURCE_REF_RE = /(!?)\[([^\]]*)\]\(:\/([0-9a-f]{32})\)/g
+
+export function resourcesSql() {
+  return "SELECT id, mime, file_extension, title, encryption_applied"
+    + " FROM resources;"
+}
+
+export function buildResourceMap(rows) {
+  const map = {}
+  const list = Array.isArray(rows) ? rows : []
+  for (let i = 0; i < list.length; i++) {
+    const id = String(list[i] && list[i].id || "")
+    if (!ID_RE.test(id)) continue
+    map[id] = {
+      id: id,
+      mime: String(list[i].mime || ""),
+      extension: String(list[i].file_extension || ""),
+      title: String(list[i].title || ""),
+      encrypted: !!Number(list[i].encryption_applied)
+    }
+  }
+  return map
+}
+
+export function isImageResource(resource) {
+  return !!resource && resource.mime.indexOf("image/") === 0
+}
+
+export function resourcePath(profileDir, id, extension) {
+  const ext = String(extension || "").replace(/^\./, "")
+  return stripTrailingSlash(profileDir) + "/" + RESOURCE_DIR + "/" + id
+    + (ext !== "" ? "." + ext : "")
+}
+
+// A path can contain characters that are not legal in a URL (a profile under a
+// directory with spaces, say), so the path component is encoded.
+export function fileUrl(path) {
+  return "file://" + encodeURI(String(path || ""))
+}
+
+// Splits a note body into an ordered list of segments:
+//   { kind: "text",  text }                  Markdown, rendered by a Text
+//   { kind: "image", url, title, missing }   rendered by an Image
+//
+// Links to non-image resources stay inline in the Markdown, rewritten to a
+// file:// URL so the panel's link handler can open them.
+export function splitBody(body, resources, profileDir) {
+  const source = String(body === undefined || body === null ? "" : body)
+  const map = resources || {}
+  const segments = []
+  let buffer = ""
+
+  function flush() {
+    if (buffer.trim() !== "") segments.push({ kind: "text", text: buffer })
+    buffer = ""
+  }
+
+  let lastIndex = 0
+  RESOURCE_REF_RE.lastIndex = 0
+  let match
+  while ((match = RESOURCE_REF_RE.exec(source)) !== null) {
+    const [whole, bang, label, id] = match
+    buffer += source.slice(lastIndex, match.index)
+    lastIndex = match.index + whole.length
+
+    const resource = map[id]
+    const isImage = bang === "!" && isImageResource(resource)
+
+    if (isImage) {
+      flush()
+      segments.push({
+        kind: "image",
+        url: fileUrl(resourcePath(profileDir, id, resource.extension)),
+        title: label !== "" ? label : resource.title,
+        missing: false
+      })
+      continue
+    }
+
+    if (!resource) {
+      // The reference outlived its resource row; say so rather than leaving
+      // a dangling `:/id` in the text.
+      buffer += label !== "" ? label + " (missing attachment)" : "(missing attachment)"
+      continue
+    }
+
+    // A non-image attachment, or an image reference written as a plain link.
+    const url = fileUrl(resourcePath(profileDir, id, resource.extension))
+    const text = label !== "" ? label : (resource.title !== "" ? resource.title : "attachment")
+    buffer += "[" + text + "](" + url + ")"
+  }
+
+  buffer += source.slice(lastIndex)
+  flush()
+
+  return segments
+}
+
+// --- markdown styling -------------------------------------------------------
+//
+// Two things Qt's Markdown importer gets wrong for a themed panel:
+//
+//   Links     It bakes a near-black blue into the character format, and
+//             QQuickText.linkColor does not override it (asking for red still
+//             renders blue).
+//   Code      Inline spans and fenced blocks are drawn with the system fixed
+//             font at its own point size, ignoring the item's font, so they
+//             tower over the surrounding text.
+//
+// Inline HTML does survive the importer, so both are rewritten as HTML that
+// carries the colour and size explicitly.
+
+// Only a literal colour may reach a style attribute.
+export function sanitizeColor(value) {
+  const text = String(value || "").trim()
+  if (/^#[0-9a-fA-F]{3,8}$/.test(text)) return text
+  if (/^[a-zA-Z]{3,20}$/.test(text)) return text
+  return ""
+}
+
+// Likewise a literal pixel size.
+export function sanitizeFontSize(value) {
+  const size = Math.round(Number(value))
+  if (!isFinite(size) || size < 1 || size > 200) return ""
+  return size + "px"
+}
+
+function escapeText(value) {
+  return String(value === undefined || value === null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+function escapeAttribute(value) {
+  return escapeText(value).replace(/"/g, "&quot;")
+}
+
+// A link that is not an image reference. The label keeps its Markdown, because
+// CommonMark still parses inline markup between raw HTML tags.
+const LINK_RE = /(^|[^!])\[([^\]]*)\]\(([^)\s]+)\)/g
+
+function styleProse(chunk, color) {
+  if (color === "") return chunk
+  return chunk.replace(LINK_RE, function (whole, prefix, label, url) {
+    return prefix + '<a href="' + escapeAttribute(url) + '" style="color:' + color + '">'
+      + label + "</a>"
+  })
+}
+
+function codeSpan(text, size) {
+  return '<code style="font-size:' + size + '">' + escapeText(text) + "</code>"
+}
+
+// A fenced block becomes a blockquote of per-line code spans joined by Markdown
+// hard breaks. `<pre>` would be the obvious choice but the importer treats it as
+// inline and collapses the block onto the preceding paragraph; the blockquote
+// keeps the grouping indent and the line breaks.
+function styleFence(block, size) {
+  const lines = block.split("\n")
+  lines.shift()
+  if (lines.length > 0 && /^\s*(```|~~~)\s*$/.test(lines[lines.length - 1])) lines.pop()
+  if (lines.length === 0) return ""
+  const rendered = []
+  for (let i = 0; i < lines.length; i++) {
+    rendered.push(lines[i].trim() === "" ? ">" : "> " + codeSpan(lines[i], size))
+  }
+  return "\n\n" + rendered.join("  \n") + "\n\n"
+}
+
+// Fenced blocks and inline spans are code: a link inside one is literal text
+// and must never become an anchor.
+const CODE_RE = /(```[^\n]*\n[\s\S]*?^```|~~~[^\n]*\n[\s\S]*?^~~~|`[^`\n]+`)/gm
+
+export function styleMarkdown(markdown, options) {
+  const text = String(markdown === undefined || markdown === null ? "" : markdown)
+  const settings = options || {}
+  const color = sanitizeColor(settings.linkColor)
+  const size = sanitizeFontSize(settings.fontSizePx)
+
+  const out = []
+  let last = 0
+  let match
+  CODE_RE.lastIndex = 0
+  while ((match = CODE_RE.exec(text)) !== null) {
+    out.push(styleProse(text.slice(last, match.index), color))
+    const block = match[0]
+    const fenced = block.indexOf("```") === 0 || block.indexOf("~~~") === 0
+    if (size === "") {
+      out.push(block)
+    } else if (fenced) {
+      out.push(styleFence(block, size))
+    } else {
+      out.push(codeSpan(block.slice(1, -1), size))
+    }
+    last = match.index + block.length
+  }
+  out.push(styleProse(text.slice(last), color))
+  return out.join("")
 }

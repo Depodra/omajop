@@ -22,6 +22,7 @@ BarWidget {
   readonly property string sortBy: Model.normalizeSortBy(setting("sortBy", null))
   readonly property int refreshSeconds: Model.normalizeRefreshSeconds(setting("refreshSeconds", null))
 
+  readonly property string profileDir: Model.profileDirectory(Quickshell.env("HOME"), profilePath)
   readonly property string databasePath: Model.databasePath(Quickshell.env("HOME"), profilePath)
 
   // "checking" | "no-sqlite" | "no-database" | "ready"
@@ -31,6 +32,8 @@ BarWidget {
   property var folderRows: []
   property var noteRows: []
   property var folderTree: []
+  // id -> {mime, extension, title}, used to resolve `:/<id>` refs in a body.
+  property var resourceMap: ({})
   property date now: new Date()
 
   // Body of the currently previewed note, fetched on demand.
@@ -42,7 +45,12 @@ BarWidget {
   property string bodyError: ""
   readonly property bool bodyLoading: bodyProcess.running
 
-  readonly property bool loading: foldersProcess.running || notesProcess.running || schemaProcess.running
+  // Qt's Markdown renderer will not paint file:// images, so image references
+  // are lifted out of the body and handed to the panel as separate segments.
+  readonly property var bodySegments: Model.splitBody(bodyText, resourceMap, profileDir)
+
+  readonly property bool loading: foldersProcess.running || notesProcess.running
+    || resourcesProcess.running || schemaProcess.running
   readonly property int noteCount: noteRows ? noteRows.length : 0
   readonly property bool ready: dbState === "ready"
 
@@ -108,11 +116,19 @@ BarWidget {
       failLoad(String(notesStderr.text || "").trim(), "Could not read notes.")
       return
     }
+    resourcesProcess.command = Model.sqliteArgv(databasePath, Model.resourcesSql())
+    resourcesProcess.running = true
+  }
+
+  function finishResources(exitCode) {
     try {
       var folders = Model.parseRows(foldersStdout.text || "")
       var notes = Model.parseRows(notesStdout.text || "")
+      // Attachments are decorative: a failure here must not cost the notes.
+      var resources = exitCode === 0 ? Model.parseRows(resourcesStdout.text || "") : []
       dbState = "ready"
       loadError = ""
+      resourceMap = Model.buildResourceMap(resources)
       setData(folders, notes)
     } catch (error) {
       failLoad(String(error), "The database returned unusable output.")
@@ -266,6 +282,13 @@ BarWidget {
     stdout: StdioCollector { id: notesStdout; waitForEnd: true }
     stderr: StdioCollector { id: notesStderr; waitForEnd: true }
     onExited: function(exitCode) { root.finishNotes(exitCode) }
+  }
+
+  Process {
+    id: resourcesProcess
+    running: false
+    stdout: StdioCollector { id: resourcesStdout; waitForEnd: true }
+    onExited: function(exitCode) { root.finishResources(exitCode) }
   }
 
   Process {

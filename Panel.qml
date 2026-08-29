@@ -26,6 +26,7 @@ Panel {
   property date now: hostWidget ? hostWidget.now : new Date()
 
   readonly property string bodyText: hostWidget ? hostWidget.bodyText : ""
+  readonly property var bodySegments: hostWidget && hostWidget.bodySegments ? hostWidget.bodySegments : []
   readonly property int bodyMarkup: hostWidget ? hostWidget.bodyMarkup : Model.MARKUP_MARKDOWN
   readonly property bool bodyEncrypted: hostWidget ? hostWidget.bodyEncrypted : false
   readonly property bool bodyTruncated: hostWidget ? hostWidget.bodyTruncated : false
@@ -41,6 +42,14 @@ Panel {
   readonly property color contentForeground: bar ? bar.barForeground : Color.foreground
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color mutedForeground: Qt.darker(contentForeground, 1.5)
+
+  // Links are styled through inline HTML, so the accent has to reach the CSS as
+  // a literal. A QML color stringifies to #aarrggbb, which CSS would read as
+  // #rrggbbaa, so the channels are written out explicitly.
+  readonly property string linkColorHex: {
+    function channel(value) { return ("0" + Math.round(value * 255).toString(16)).slice(-2) }
+    return "#" + channel(Color.accent.r) + channel(Color.accent.g) + channel(Color.accent.b)
+  }
 
   // "All notes" is a folder row like any other, with the empty id the model
   // already treats as "no folder filter".
@@ -181,6 +190,8 @@ Panel {
       onActivateRequested: root.openSelected()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      // hjkl needs no handling here: PanelKeyCatcher already maps it onto
+      // moveRequested, and accepts those keys before textKey is emitted.
       onTextKey: function(text) {
         if (text === "r" || text === "R") root.refreshNow()
         else if (text === "/") searchField.forceActiveFocus()
@@ -625,7 +636,7 @@ Panel {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             contentWidth: width
-            contentHeight: previewBody.implicitHeight
+            contentHeight: previewColumn.implicitHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             interactive: contentHeight > height
@@ -633,27 +644,115 @@ Panel {
             // Reading a new note should start at the top of it.
             onContentHeightChanged: contentY = 0
 
-            Text {
-              id: previewBody
+            Column {
+              id: previewColumn
               width: previewScroll.width
-              text: {
-                if (root.bodyError !== "") return root.bodyError
-                if (root.bodyEncrypted) return "This note is still encrypted locally."
-                if (root.bodyLoading && root.bodyText === "") return "Loading…"
-                if (!root.selectedNote) return ""
-                return root.bodyText
+              spacing: Style.space(8)
+
+              // Anything that replaces the body outright: an error, an
+              // encrypted note, or the gap before the first read returns.
+              Text {
+                width: parent.width
+                visible: text !== ""
+                text: {
+                  if (root.bodyError !== "") return root.bodyError
+                  if (root.bodyEncrypted) return "This note is still encrypted locally."
+                  if (root.bodyLoading && root.bodyText === "") return "Loading…"
+                  return ""
+                }
+                textFormat: Text.PlainText
+                color: root.bodyError !== "" ? Color.urgent : root.mutedForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
               }
-              // Joplin stores Markdown (markup_language 1) or HTML (2).
-              textFormat: {
-                if (root.bodyError !== "" || root.bodyEncrypted) return Text.PlainText
-                return root.bodyMarkup === Model.MARKUP_HTML ? Text.RichText : Text.MarkdownText
+
+              // The body arrives pre-split: prose in text segments, each image
+              // in its own, because Qt's Markdown renderer reserves space for a
+              // file:// image and then paints nothing.
+              Repeater {
+                model: root.bodySegments
+
+                delegate: Item {
+                  id: segment
+                  required property var modelData
+
+                  readonly property bool isImage: segment.modelData.kind === "image"
+
+                  width: previewColumn.width
+                  implicitHeight: segment.isImage
+                    ? Math.max(segmentImage.height, segmentImageNotice.visible ? segmentImageNotice.implicitHeight : 0)
+                    : segmentText.implicitHeight
+                  height: implicitHeight
+
+                  Text {
+                    id: segmentText
+                    visible: !segment.isImage
+                    width: parent.width
+                    text: {
+                      if (segment.isImage) return ""
+                      // An HTML note carries its own styling; only Markdown
+                      // needs its links rewritten.
+                      if (root.bodyMarkup === Model.MARKUP_HTML) return segment.modelData.text
+                      return Model.styleMarkdown(segment.modelData.text, {
+                        linkColor: root.linkColorHex,
+                        fontSizePx: Style.font.bodySmall
+                      })
+                    }
+                    // Joplin stores Markdown (markup_language 1) or HTML (2).
+                    textFormat: root.bodyMarkup === Model.MARKUP_HTML
+                      ? Text.RichText : Text.MarkdownText
+                    color: root.contentForeground
+                    // Honoured for HTML notes. Markdown ignores it entirely —
+                    // the importer bakes its own blue into the character format,
+                    // which is why links are rewritten as styled anchors above.
+                    linkColor: Color.accent
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    wrapMode: Text.Wrap
+                    // Rendered note bodies are data, not navigation.
+                    onLinkActivated: function(link) { Quickshell.execDetached(["xdg-open", link]) }
+                  }
+
+                  Image {
+                    id: segmentImage
+                    visible: segment.isImage && status === Image.Ready
+                    source: segment.isImage ? segment.modelData.url : ""
+                    asynchronous: true
+                    fillMode: Image.PreserveAspectFit
+                    // Fit the pane, but never blow a small image up to fill it.
+                    width: implicitWidth > 0
+                      ? Math.min(implicitWidth, parent.width)
+                      : 0
+                    height: implicitWidth > 0
+                      ? Math.round(implicitHeight * (width / implicitWidth))
+                      : 0
+                    // No sourceSize: it is a decode target, not a cap, so Qt
+                    // would scale a small image UP to it and render it blurred.
+                    // Natural size drives implicitWidth instead, and mipmap
+                    // keeps a large image sharp once bound to the pane.
+                    mipmap: true
+                    smooth: true
+                  }
+
+                  Text {
+                    id: segmentImageNotice
+                    visible: segment.isImage && segmentImage.status === Image.Error
+                    width: parent.width
+                    text: {
+                      var title = segment.isImage ? Model.plainLine(segment.modelData.title) : ""
+                      return title !== ""
+                        ? "Missing image file: " + title
+                        : "Missing image file"
+                    }
+                    textFormat: Text.PlainText
+                    color: root.mutedForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
               }
-              color: root.contentForeground
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.Wrap
-              // Rendered note bodies are data, not navigation.
-              onLinkActivated: function(link) { Quickshell.execDetached(["xdg-open", link]) }
             }
           }
 
