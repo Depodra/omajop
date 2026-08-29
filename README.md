@@ -112,6 +112,7 @@ omarchy restart shell
 | Middle-click the bar icon | Refresh now |
 | `↑` `↓` or `j` `k` | Move within the active column |
 | `←` `→` or `h` `l` | Switch between folders and notes |
+| `d` `u` | Scroll the preview half a pane down / up |
 | `Enter` | Open the selected note in Joplin |
 | `/` | Focus the filter |
 | `r` | Refresh |

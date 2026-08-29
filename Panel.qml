@@ -146,6 +146,17 @@ Panel {
     if (hostWidget) hostWidget.refresh()
   }
 
+  // j/k move the selection, so without this the keyboard cannot reach the
+  // bottom of a long note. Half a pane at a time, so the step follows the
+  // panel's height rather than a hardcoded distance.
+  function scrollPreview(panes) {
+    if (!previewScroll) return
+    var limit = Math.max(0, previewScroll.contentHeight - previewScroll.height)
+    if (limit <= 0) return
+    var target = previewScroll.contentY + previewScroll.height * panes
+    previewScroll.contentY = Math.max(0, Math.min(limit, target))
+  }
+
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.barIdentity, direction)
@@ -193,7 +204,9 @@ Panel {
       // hjkl needs no handling here: PanelKeyCatcher already maps it onto
       // moveRequested, and accepts those keys before textKey is emitted.
       onTextKey: function(text) {
-        if (text === "r" || text === "R") root.refreshNow()
+        if (text === "d") root.scrollPreview(0.5)
+        else if (text === "u") root.scrollPreview(-0.5)
+        else if (text === "r" || text === "R") root.refreshNow()
         else if (text === "/") searchField.forceActiveFocus()
       }
 
