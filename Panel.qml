@@ -45,7 +45,13 @@ Panel {
   // 0 = folders, 1 = notes. Left/right moves between them.
   property int activePane: 1
 
-  readonly property color contentForeground: bar ? bar.barForeground : Color.foreground
+  // bar.foreground, not bar.barForeground: the latter adapts to the wallpaper
+  // behind the bar when the bar is transparent, which is right for something
+  // drawn *on* the bar and wrong for panel content sitting on the popup's own
+  // background. A bright wallpaper turns it dark, and the panel goes unreadable
+  // — and because it is computed per monitor, only on the screen whose
+  // wallpaper is bright there.
+  readonly property color contentForeground: bar ? bar.foreground : Color.foreground
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color mutedForeground: Qt.darker(contentForeground, 1.5)
 
