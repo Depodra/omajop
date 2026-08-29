@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step: the model has no dependencies, which is the whole
+      # reason the SQL, parsing and formatting live outside the QML.
+      - run: npm test
+
+      # qmllint is deliberately not run here. It needs Qt 6 *and* the Omarchy
+      # shell's own components at /usr/share/omarchy/shell to resolve qs.Ui and
+      # qs.Commons, neither of which exists on a runner. See the README for the
+      # local command.

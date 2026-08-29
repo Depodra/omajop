@@ -1,5 +1,7 @@
 # omajop
 
+[![tests](https://github.com/renerocksai/omajop/actions/workflows/tests.yml/badge.svg)](https://github.com/renerocksai/omajop/actions/workflows/tests.yml)
+
 A Joplin notes browser for the [Omarchy](https://omarchy.org/) shell bar.
 
 A note icon sits in the bar. Click it and it expands into a Joplin-like view:
@@ -10,21 +12,28 @@ selected note rendered on the right.
 
 ## Install
 
-Requires `sqlite3` (`omarchy pkg add sqlite`) and a Joplin desktop profile.
-
 ```bash
-git clone https://github.com/renerocksai/omajop.git
-ln -s "$PWD/omajop" ~/.config/omarchy/plugins/org.ren.omajop
-omarchy bar put org.ren.omajop
-omarchy restart shell
+omarchy plugin add https://github.com/renerocksai/omajop.git --enable
 ```
 
-`omarchy bar put` places it in the center section by default; pass
-`--section left|center|right` to choose another.
+That clones into `~/.config/omarchy/plugins/org.ren.omajop`, asks which bar
+section to put it in (center by default), and rescans the shell itself — no
+restart needed.
 
-> Plugin code is reloaded on save, but if the plugin directory is a **symlink**
-> the watcher does not see writes to the real path. Use `omarchy restart shell`
-> after editing.
+It also needs `sqlite3`, which is how it reads the profile:
+
+```bash
+omarchy pkg add sqlite
+```
+
+Afterwards `omarchy plugin update org.ren.omajop` and
+`omarchy plugin remove org.ren.omajop` do what they say. To move it later:
+
+```bash
+omarchy bar move org.ren.omajop --section right
+```
+
+To hack on it instead of just running it, see [Development](#development).
 
 ## Using it
 
@@ -33,11 +42,11 @@ omarchy restart shell
 | Click the bar icon | Open / close the panel |
 | Middle-click the bar icon | Refresh now |
 | `↑` `↓` or `j` `k` | Move within the active column |
-| `←` `→` or `h` `l` | Switch between folders and notes |
+| `←` `→` or `h` `l` | Switch between the sources column and the notes column |
 | `d` `u` | Scroll the preview half a pane down / up |
 | `g` `G` | Jump the preview to the top / bottom |
 | `Enter` | Open the selected note in Joplin |
-| `/` | Focus the filter |
+| `/` | Focus the search box |
 | `r` | Refresh |
 | `Esc` or `q` | Close |
 
@@ -47,22 +56,32 @@ The left column lists **folders and then tags**. Selecting either scopes the
 note list; `↑`/`↓` walk the whole column, stepping over the `TAGS` caption. A
 note's own tags appear beside its timestamp in the preview.
 
-The filter searches **titles and note bodies** — a word that appears only inside
-a note still finds it.
+Search covers **titles and note bodies** — a word that appears only inside a
+note still finds it.
 
 ## Settings
 
-Set these on the widget's entry in `~/.config/omarchy/shell.json`, or with
-`omarchy bar set org.ren.omajop <key> <value>`.
+**You should not need to set any of these.** With no configuration omajop reads
+the standard Joplin desktop profile and keeps itself up to date; the defaults
+below are what it uses when `shell.json` says nothing about it.
 
-| Key | Default | |
+| Key | Default | Change it when |
 |---|---|---|
-| `profilePath` | `~/.config/joplin-desktop` | Joplin profile directory |
-| `sortBy` | `updated` | `updated` or `title` |
-| `refreshSeconds` | `60` | How often the note list is re-read |
+| `profilePath` | `~/.config/joplin-desktop` | Your profile is elsewhere — a portable profile, or a second Joplin started with `--profile` |
+| `sortBy` | `updated` | You would rather browse alphabetically: `title` |
+| `refreshSeconds` | `60` | You want outside edits noticed sooner, or less polling on battery. 5–3600 |
 
-Every value is clamped in `Model.mjs` on the way in, because `shell.json` is
-hand-editable and the manifest schema is only a hint.
+To change one:
+
+```bash
+omarchy bar set org.ren.omajop sortBy title
+```
+
+or edit the widget's entry in `~/.config/omarchy/shell.json` directly. Every
+value is clamped in `Model.mjs` on the way in, because `shell.json` is
+hand-editable and the manifest schema is only a hint — a test holds the
+manifest's defaults and the model's clamps to each other, so they cannot
+drift apart.
 
 ## IPC
 
@@ -184,14 +203,39 @@ counts less obvious than they look:
 
 ## Development
 
+To work on it, clone anywhere and symlink the checkout in under the plugin id:
+
+```bash
+git clone https://github.com/renerocksai/omajop.git
+ln -s "$PWD/omajop" ~/.config/omarchy/plugins/org.ren.omajop
+omarchy bar put org.ren.omajop
+omarchy restart shell
+```
+
+> Plugin code is reloaded on save, but when the plugin directory is a
+> **symlink** the watcher does not see writes to the real path. Run
+> `omarchy restart shell` after editing.
+
+`omarchy plugin validate .` checks the folder against Omarchy's manifest
+schema.
+
 All SQL building, parsing, and formatting lives in `Model.mjs`, so it can be
-tested without a compositor:
+tested without a compositor, and with no dependencies to install:
 
 ```bash
 npm test
 ```
 
-Lint the QML against the shell's own components:
+CI runs exactly that on Node 20, 22 and 24. Alongside the behaviour tests, it
+checks `manifest.json` against the model: every declared setting must have a
+default, every default must survive the model's own clamping, and the `sortBy`
+options must be the ones the model accepts. `shell.json` is hand-editable and
+the manifest schema is only a hint, so a default the model would rewrite is a
+default that lies about what the widget does.
+
+qmllint is not run in CI: it needs Qt 6 *and* the Omarchy shell's own
+components at `/usr/share/omarchy/shell` to resolve `qs.Ui` and `qs.Commons`,
+neither of which exists on a runner. Locally:
 
 ```bash
 mkdir -p /tmp/qmlroot && ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
