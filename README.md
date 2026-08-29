@@ -165,6 +165,13 @@ around by rewriting the body as inline HTML (which, unlike a `file://` image,
   blockquote of per-line code spans: `<pre>` would be the obvious choice, but the
   importer treats it as inline and collapses the block onto the previous
   paragraph.
+- **Tables.** The grid is drawn in Qt's own colour, and the only styling it
+  honours is the `bordercolor` attribute on an HTML `<table>` — CSS borders on
+  cells are dropped and the grid vanishes altogether. Tables are converted to
+  HTML with a dimmed-foreground border and real cell padding. The importer then
+  treats the table as a raw HTML block and stops parsing Markdown inside it, so
+  each cell's own inline markup — bold, italic, strikethrough, code, links — is
+  rendered here too, and cell text is escaped so a note cannot inject markup.
 
 An HTML note (`markup_language = 2`) is rendered as RichText, which skips the
 Markdown rewriting — but Qt renders *its* anchors and code exactly as badly, so
@@ -175,10 +182,6 @@ background and are routinely illegible on a dark one.
 Only a literal colour and a literal pixel size are allowed into a style
 attribute, and code content is escaped, so note text cannot inject markup.
 Links inside code stay literal.
-
-Known limitation: Markdown **table borders** still use Qt's default colour
-rather than the theme's. Fixing that would mean converting tables to styled
-HTML, which is a lot of parsing for a thin gain on a dark theme.
 
 ### Tags
 
@@ -239,6 +242,12 @@ omarchy restart shell
 
 `omarchy plugin validate .` checks the folder against Omarchy's manifest
 schema.
+
+`tests/render-test.md` is a note that exercises the renderer end to end:
+headings, a table using all three alignments with markdown inside its cells,
+bullet, ordered and checkbox lists, a fenced block, and escaping. Paste it into
+a new Joplin note to eyeball the result — omajop will not create it for you,
+because it never writes to the database.
 
 All SQL building, parsing, and formatting lives in `Model.mjs`, so it can be
 tested without a compositor, and with no dependencies to install:

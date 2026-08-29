@@ -610,8 +610,143 @@ function addBlockSpacing(chunk) {
   return out.join("\n")
 }
 
-function styleProse(chunk, color) {
-  return addBlockSpacing(styleLinksInProse(chunk, color))
+// --- tables -----------------------------------------------------------------
+//
+// Qt draws a Markdown table's grid in its own colour, ignoring the theme. The
+// only styling it honours is the `bordercolor` attribute on an HTML <table>;
+// CSS borders on cells are dropped and the table loses its grid entirely. So a
+// table is converted to HTML — and because the importer treats that as a raw
+// HTML block, the Markdown *inside* each cell stops being parsed and has to be
+// rendered here too.
+
+const TABLE_DELIMITER_RE = /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-*:?\s*\|?\s*$/
+const CELL_LINK_RE = /\[([^\]]*)\]\(([^)\s]+)\)/g
+const CELL_CODE_RE = /`[^`\n]+`/g
+
+function splitRow(line) {
+  let text = line.trim()
+  if (text.charAt(0) === "|") text = text.slice(1)
+  if (text.charAt(text.length - 1) === "|") text = text.slice(0, -1)
+  const cells = text.split("|")
+  for (let i = 0; i < cells.length; i++) cells[i] = cells[i].trim()
+  return cells
+}
+
+function alignmentOf(spec) {
+  const text = String(spec || "").trim()
+  const left = text.charAt(0) === ":"
+  const right = text.charAt(text.length - 1) === ":"
+  if (left && right) return "center"
+  if (right) return "right"
+  if (left) return "left"
+  return ""
+}
+
+// The inline subset that actually turns up in table cells. Escaping happens
+// first, so anything not matched here stays literal text.
+function renderCellProse(text, color) {
+  let out = escapeText(text)
+  if (color !== "") {
+    out = out.replace(CELL_LINK_RE, function (whole, label, url) {
+      return '<a href="' + url + '" style="color:' + color + '">' + label + "</a>"
+    })
+  }
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+  out = out.replace(/__([^_]+)__/g, "<b>$1</b>")
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
+  out = out.replace(/~~([^~]+)~~/g, "<s>$1</s>")
+  return out
+}
+
+function renderCell(text, color, size) {
+  const parts = []
+  let last = 0
+  let match
+  CELL_CODE_RE.lastIndex = 0
+  while ((match = CELL_CODE_RE.exec(text)) !== null) {
+    parts.push(renderCellProse(text.slice(last, match.index), color))
+    const code = match[0].slice(1, -1)
+    parts.push(size !== "" ? codeSpan(code, size) : escapeText(code))
+    last = match.index + match[0].length
+  }
+  parts.push(renderCellProse(text.slice(last), color))
+  return parts.join("")
+}
+
+function renderTable(header, alignments, rows, options) {
+  const border = options.border
+  const color = options.color
+  const size = options.size
+  const parts = ['<table border="1" bordercolor="' + border
+    + '" cellpadding="4" cellspacing="0">']
+
+  function cells(values, tag) {
+    let row = "<tr>"
+    for (let i = 0; i < values.length; i++) {
+      const align = alignments[i] || ""
+      row += "<" + tag + (align !== "" ? ' align="' + align + '"' : "") + ">"
+        + renderCell(values[i], color, size) + "</" + tag + ">"
+    }
+    return row + "</tr>"
+  }
+
+  parts.push(cells(header, "th"))
+  for (let i = 0; i < rows.length; i++) parts.push(cells(rows[i], "td"))
+  parts.push("</table>")
+  return parts.join("")
+}
+
+function convertTables(chunk, options) {
+  if (options.border === "") return chunk
+  const lines = chunk.split("\n")
+  const out = []
+  let i = 0
+  while (i < lines.length) {
+    const isTableStart = i + 1 < lines.length
+      && lines[i].indexOf("|") !== -1
+      && TABLE_DELIMITER_RE.test(lines[i + 1])
+    if (!isTableStart) {
+      out.push(lines[i])
+      i++
+      continue
+    }
+    const header = splitRow(lines[i])
+    const alignments = splitRow(lines[i + 1]).map(alignmentOf)
+    const rows = []
+    let end = i + 2
+    while (end < lines.length && lines[end].trim() !== "" && lines[end].indexOf("|") !== -1) {
+      rows.push(splitRow(lines[end]))
+      end++
+    }
+    out.push(renderTable(header, alignments, rows, options))
+    i = end
+  }
+  return out.join("\n")
+}
+
+// Inline code and links have to be resolved in one pass: styling the code
+// first would leave `[label](url)` sitting inside a <code> tag for the link
+// pass to find and turn into an anchor.
+function styleInline(chunk, options) {
+  const parts = []
+  let last = 0
+  let match
+  INLINE_CODE_RE.lastIndex = 0
+  while ((match = INLINE_CODE_RE.exec(chunk)) !== null) {
+    parts.push(styleLinksInProse(chunk.slice(last, match.index), options.color))
+    parts.push(options.size !== ""
+      ? codeSpan(match[0].slice(1, -1), options.size)
+      : match[0])
+    last = match.index + match[0].length
+  }
+  parts.push(styleLinksInProse(chunk.slice(last), options.color))
+  return parts.join("")
+}
+
+function styleProse(chunk, options) {
+  // Tables first: their cells own their inline markdown, and once rendered they
+  // hold no backticks or link syntax for the later passes to find.
+  return addBlockSpacing(styleInline(convertTables(chunk, options), options))
 }
 
 function codeSpan(text, size) {
@@ -634,34 +769,33 @@ function styleFence(block, size) {
   return "\n\n" + rendered.join("  \n") + "\n\n"
 }
 
-// Fenced blocks and inline spans are code: a link inside one is literal text
-// and must never become an anchor.
-const CODE_RE = /(```[^\n]*\n[\s\S]*?^```|~~~[^\n]*\n[\s\S]*?^~~~|`[^`\n]+`)/gm
+// Only fenced blocks split the document. An inline code span is inline — it can
+// appear inside a table cell — so it is handled per prose chunk, after tables
+// have been recognised. Splitting on it here would tear a table row in half.
+const FENCE_RE = /(```[^\n]*\n[\s\S]*?^```|~~~[^\n]*\n[\s\S]*?^~~~)/gm
+const INLINE_CODE_RE = /`[^`\n]+`/g
 
 export function styleMarkdown(markdown, options) {
   const text = String(markdown === undefined || markdown === null ? "" : markdown)
   const settings = options || {}
   const color = sanitizeColor(settings.linkColor)
   const size = sanitizeFontSize(settings.fontSizePx)
+  const styling = {
+    color: color,
+    size: size,
+    border: sanitizeColor(settings.tableBorderColor)
+  }
 
   const out = []
   let last = 0
   let match
-  CODE_RE.lastIndex = 0
-  while ((match = CODE_RE.exec(text)) !== null) {
-    out.push(styleProse(text.slice(last, match.index), color))
-    const block = match[0]
-    const fenced = block.indexOf("```") === 0 || block.indexOf("~~~") === 0
-    if (size === "") {
-      out.push(block)
-    } else if (fenced) {
-      out.push(styleFence(block, size))
-    } else {
-      out.push(codeSpan(block.slice(1, -1), size))
-    }
-    last = match.index + block.length
+  FENCE_RE.lastIndex = 0
+  while ((match = FENCE_RE.exec(text)) !== null) {
+    out.push(styleProse(text.slice(last, match.index), styling))
+    out.push(size === "" ? match[0] : styleFence(match[0], size))
+    last = match.index + match[0].length
   }
-  out.push(styleProse(text.slice(last), color))
+  out.push(styleProse(text.slice(last), styling))
   return out.join("")
 }
 

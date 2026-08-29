@@ -52,10 +52,15 @@ Panel {
   // Links are styled through inline HTML, so the accent has to reach the CSS as
   // a literal. A QML color stringifies to #aarrggbb, which CSS would read as
   // #rrggbbaa, so the channels are written out explicitly.
-  readonly property string linkColorHex: {
+  function hexOf(colour) {
     function channel(value) { return ("0" + Math.round(value * 255).toString(16)).slice(-2) }
-    return "#" + channel(Color.accent.r) + channel(Color.accent.g) + channel(Color.accent.b)
+    return "#" + channel(colour.r) + channel(colour.g) + channel(colour.b)
   }
+
+  readonly property string linkColorHex: root.hexOf(Color.accent)
+  // Table borders sit behind the text, so they take a dimmed foreground rather
+  // than the accent, which reads as a loud grid at full strength.
+  readonly property string tableBorderHex: root.hexOf(Qt.darker(root.contentForeground, 2.2))
 
   // Folders and tags share one navigable list. "All notes" is a row like any
   // other, carrying the empty id the model already reads as "no filter".
@@ -802,7 +807,8 @@ Panel {
                       if (segment.isImage) return ""
                       var styling = {
                         linkColor: root.linkColorHex,
-                        fontSizePx: Style.font.bodySmall
+                        fontSizePx: Style.font.bodySmall,
+                        tableBorderColor: root.tableBorderHex
                       }
                       // Qt renders anchors and code the same untheme-aware way
                       // in both formats; only the rewriting differs.
