@@ -136,3 +136,52 @@ test("an anchor closing tag is not mistaken for an opening one", () => {
   const out = htmlOf('<a href="x">t</a> and </a>')
   assert.equal((out.match(/style="color/g) || []).length, 1)
 })
+
+// --- block spacing ----------------------------------------------------------
+// Qt gives every block the same gap as a line break, so a note's structure is
+// invisible without an explicit spacer.
+
+test("a blank line between two blocks becomes a visible spacer", () => {
+  assert.equal(style("A paragraph.\n\nAnother one."),
+    "A paragraph.\n\n&nbsp;\n\nAnother one.")
+})
+
+test("a blank line between list items is left alone", () => {
+  // Splitting there would end the list and restart an ordered one at 1.
+  assert.equal(style("- one\n\n- two"), "- one\n\n- two")
+  assert.equal(style("1. one\n\n2. two"), "1. one\n\n2. two")
+  assert.equal(style("* one\n\n* two"), "* one\n\n* two")
+})
+
+test("a list is still separated from the prose around it", () => {
+  const out = style("Before.\n\n- one\n- two\n\nAfter.")
+  assert.equal(out, "Before.\n\n&nbsp;\n\n- one\n- two\n\n&nbsp;\n\nAfter.")
+})
+
+test("whitespace-only lines count as blank", () => {
+  // Joplin's editor writes these between list items.
+  assert.equal(style("- one\n    \n- two"), "- one\n\n- two")
+  assert.equal(style("Para.\n   \nOther."), "Para.\n\n&nbsp;\n\nOther.")
+})
+
+test("a run of blank lines collapses to a single spacer", () => {
+  assert.equal(style("A.\n\n\n\nB."), "A.\n\n&nbsp;\n\nB.")
+})
+
+test("leading and trailing blank lines do not gain a spacer", () => {
+  assert.equal(style("\n\nA paragraph.\n\n"), "\n\nA paragraph.\n\n")
+})
+
+test("a heading is separated from the paragraph under it", () => {
+  assert.equal(style("## Heading\n\nText."), "## Heading\n\n&nbsp;\n\nText.")
+})
+
+test("blank lines inside a fenced block are not touched", () => {
+  const out = style("```\nfirst\n\nsecond\n```")
+  assert.ok(!out.includes("&nbsp;"), out)
+})
+
+test("spacing does not disturb an inline code span", () => {
+  assert.equal(style("Use `a b` here."),
+    'Use <code style="font-size:11px">a b</code> here.')
+})

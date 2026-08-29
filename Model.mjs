@@ -539,12 +539,60 @@ function escapeAttribute(value) {
 // CommonMark still parses inline markup between raw HTML tags.
 const LINK_RE = /(^|[^!])\[([^\]]*)\]\(([^)\s]+)\)/g
 
-function styleProse(chunk, color) {
+function styleLinksInProse(chunk, color) {
   if (color === "") return chunk
   return chunk.replace(LINK_RE, function (whole, prefix, label, url) {
     return prefix + '<a href="' + escapeAttribute(url) + '" style="color:' + color + '">'
       + label + "</a>"
   })
+}
+
+const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/
+
+// Qt gives every block the same gap as a line break: paragraph to paragraph,
+// heading to paragraph, list to paragraph all render at one rhythm, so the
+// structure of a note is invisible. An empty paragraph restores the
+// distinction — the only spacer that survives, since <br> destroys a following
+// list and a margin style merges the lines around it.
+//
+// A blank line *between two list items* is left alone. Splitting there would
+// end the list and restart an ordered one at 1, and a checklist reads better
+// tight anyway.
+function addBlockSpacing(chunk) {
+  const lines = chunk.split("\n")
+  const out = []
+  let i = 0
+  while (i < lines.length) {
+    if (lines[i].trim() !== "") {
+      out.push(lines[i])
+      i++
+      continue
+    }
+    // Collapse a run of blank or whitespace-only lines to one boundary.
+    let end = i
+    while (end < lines.length && lines[end].trim() === "") end++
+
+    const before = out.length > 0 ? out[out.length - 1] : ""
+    const after = end < lines.length ? lines[end] : ""
+    const atEdge = before === "" || after === ""
+    const withinList = LIST_ITEM_RE.test(before) && LIST_ITEM_RE.test(after)
+
+    if (atEdge) {
+      // Nothing to separate: leave the run exactly as the note had it.
+      for (let k = i; k < end; k++) out.push(lines[k])
+    } else if (withinList) {
+      // One blank line, normalised: a whitespace-only line is still blank.
+      out.push("")
+    } else {
+      out.push("", "&nbsp;", "")
+    }
+    i = end
+  }
+  return out.join("\n")
+}
+
+function styleProse(chunk, color) {
+  return addBlockSpacing(styleLinksInProse(chunk, color))
 }
 
 function codeSpan(text, size) {

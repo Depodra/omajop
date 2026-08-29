@@ -152,6 +152,13 @@ around by rewriting the body as inline HTML (which, unlike a `file://` image,
 - **Links.** It bakes a near-black blue into the character format, and
   `Text.linkColor` does not override it — ask for a red link and you still get
   blue. Links are rewritten as `<a style="color:…">` carrying the theme accent.
+- **Block spacing.** Every block gets the same gap as a line break —
+  paragraph to paragraph, heading to paragraph, list to paragraph all render at
+  one rhythm, so a note's structure is invisible. An empty paragraph is inserted
+  at each block boundary to restore it; `<br>` destroys a following list and a
+  margin style merges the lines around it, so it is the only spacer that
+  survives. A blank line *between two list items* is left alone: splitting there
+  would end the list and restart an ordered one at 1.
 - **Code.** Inline spans and fenced blocks are drawn with the system fixed font
   at *its* point size rather than the item's, so they tower over the surrounding
   text. Both are rewritten with an explicit `font-size`. A fenced block becomes a
