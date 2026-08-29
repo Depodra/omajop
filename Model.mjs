@@ -682,3 +682,97 @@ export function styleHtml(html, options) {
   }
   return text
 }
+
+// --- tags -------------------------------------------------------------------
+//
+// Tags live in `tags`, and `note_tags` joins them to notes. Neither table has a
+// deleted_time column, and a note_tags row outlives the note it points at, so
+// counts are taken against the notes actually on screen rather than the join
+// table's own size.
+
+export const SOURCE_ALL = "all"
+export const SOURCE_FOLDER = "folder"
+export const SOURCE_TAG = "tag"
+
+// One query rather than two: the LEFT JOIN also yields a row for a tag that has
+// no notes, so an empty tag still appears in the list.
+export function tagsSql() {
+  return "SELECT t.id AS tag_id, t.title AS title, nt.note_id AS note_id"
+    + " FROM tags t LEFT JOIN note_tags nt ON nt.tag_id = t.id"
+    + " ORDER BY t.title COLLATE NOCASE ASC;"
+}
+
+// Returns { tags, notesByTag, tagsByNote } where `tags` keeps the query's
+// ordering, `notesByTag` drives filtering, and `tagsByNote` labels a note.
+export function buildTagIndex(rows, notes) {
+  const joined = Array.isArray(rows) ? rows : []
+  const noteList = Array.isArray(notes) ? notes : []
+
+  const live = {}
+  for (let i = 0; i < noteList.length; i++) {
+    const id = String(noteList[i] && noteList[i].id || "")
+    if (id !== "") live[id] = true
+  }
+
+  const byId = {}
+  const notesByTag = {}
+  const tagsByNote = {}
+  const tags = []
+
+  for (let i = 0; i < joined.length; i++) {
+    const tagId = String(joined[i] && joined[i].tag_id || "")
+    if (!ID_RE.test(tagId)) continue
+
+    if (!byId[tagId]) {
+      byId[tagId] = { id: tagId, title: String(joined[i].title || "").trim() || "Untitled", count: 0 }
+      notesByTag[tagId] = {}
+      tags.push(byId[tagId])
+    }
+
+    const noteId = String(joined[i].note_id || "")
+    // Skip the LEFT JOIN's null row, a note in the trash, and any duplicate
+    // pairing the join table happens to hold.
+    if (noteId === "" || !live[noteId] || notesByTag[tagId][noteId]) continue
+
+    notesByTag[tagId][noteId] = true
+    byId[tagId].count++
+    if (!tagsByNote[noteId]) tagsByNote[noteId] = []
+    tagsByNote[noteId].push(byId[tagId].title)
+  }
+
+  const noteIds = Object.keys(tagsByNote)
+  for (let i = 0; i < noteIds.length; i++) {
+    tagsByNote[noteIds[i]].sort(function (a, b) {
+      return a.toLowerCase() < b.toLowerCase() ? -1 : (a.toLowerCase() > b.toLowerCase() ? 1 : 0)
+    })
+  }
+
+  return { tags: tags, notesByTag: notesByTag, tagsByNote: tagsByNote }
+}
+
+export function emptyTagIndex() {
+  return { tags: [], notesByTag: {}, tagsByNote: {} }
+}
+
+// Replaces notesForFolder as the single entry point for "what is in view".
+export function notesForSource(notes, kind, id, tagIndex) {
+  const rows = Array.isArray(notes) ? notes : []
+  if (kind === SOURCE_TAG) {
+    const index = tagIndex || emptyTagIndex()
+    const members = index.notesByTag ? index.notesByTag[String(id || "")] : null
+    if (!members) return []
+    const out = []
+    for (let i = 0; i < rows.length; i++) {
+      if (members[String(rows[i] && rows[i].id || "")]) out.push(rows[i])
+    }
+    return out
+  }
+  if (kind === SOURCE_FOLDER) return notesForFolder(rows, id)
+  return rows.slice()
+}
+
+export function tagsForNote(tagIndex, noteId) {
+  const index = tagIndex || emptyTagIndex()
+  const found = index.tagsByNote ? index.tagsByNote[String(noteId || "")] : null
+  return found ? found.slice() : []
+}

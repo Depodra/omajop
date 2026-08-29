@@ -28,13 +28,17 @@ Panel {
   readonly property string bodyText: hostWidget ? hostWidget.bodyText : ""
   readonly property var bodySegments: hostWidget && hostWidget.bodySegments ? hostWidget.bodySegments : []
   readonly property var bodyMatchIds: hostWidget && hostWidget.bodyMatchIds ? hostWidget.bodyMatchIds : ({})
+  readonly property var tagIndex: hostWidget && hostWidget.tagIndex ? hostWidget.tagIndex : Model.emptyTagIndex()
+  readonly property var selectedNoteTags: Model.tagsForNote(root.tagIndex, root.selectedNoteId)
   readonly property int bodyMarkup: hostWidget ? hostWidget.bodyMarkup : Model.MARKUP_MARKDOWN
   readonly property bool bodyEncrypted: hostWidget ? hostWidget.bodyEncrypted : false
   readonly property bool bodyTruncated: hostWidget ? hostWidget.bodyTruncated : false
   readonly property bool bodyLoading: hostWidget ? hostWidget.bodyLoading : false
   readonly property string bodyError: hostWidget ? hostWidget.bodyError : ""
 
-  property string selectedFolderId: Model.ALL_NOTES_ID
+  // The sidebar selects a "source": everything, one folder, or one tag.
+  property string selectedKind: Model.SOURCE_ALL
+  property string selectedId: ""
   property string selectedNoteId: ""
   property string query: ""
   // 0 = folders, 1 = notes. Left/right moves between them.
@@ -52,42 +56,55 @@ Panel {
     return "#" + channel(Color.accent.r) + channel(Color.accent.g) + channel(Color.accent.b)
   }
 
-  // "All notes" is a folder row like any other, with the empty id the model
-  // already treats as "no folder filter".
-  readonly property var folderItems: {
+  // Folders and tags share one navigable list. "All notes" is a row like any
+  // other, carrying the empty id the model already reads as "no filter".
+  readonly property var sourceItems: {
     var items = [{
-      id: Model.ALL_NOTES_ID,
+      kind: Model.SOURCE_ALL,
+      id: "",
       title: "All notes",
       depth: 0,
-      noteCount: root.noteRows.length,
-      totalCount: root.noteRows.length,
-      isAll: true
+      count: root.noteRows.length
     }]
     for (var i = 0; i < root.folderTree.length; i++) {
       var folder = root.folderTree[i]
       items.push({
+        kind: Model.SOURCE_FOLDER,
         id: folder.id,
         title: folder.title,
         depth: folder.depth,
-        noteCount: folder.noteCount,
-        totalCount: folder.totalCount,
-        isAll: false
+        count: folder.totalCount
       })
+    }
+    var tags = root.tagIndex.tags || []
+    if (tags.length > 0) {
+      // A caption row, skipped by the keyboard and by the mouse.
+      items.push({ kind: "header", id: "", title: "TAGS", depth: 0, count: -1 })
+      for (var j = 0; j < tags.length; j++) {
+        items.push({
+          kind: Model.SOURCE_TAG,
+          id: tags[j].id,
+          title: tags[j].title,
+          depth: 0,
+          count: tags[j].count
+        })
+      }
     }
     return items
   }
 
   readonly property var visibleNotes:
-    Model.filterNotes(Model.notesForFolder(root.noteRows, root.selectedFolderId),
-                      root.query, root.bodyMatchIds)
+    Model.filterNotes(
+      Model.notesForSource(root.noteRows, root.selectedKind, root.selectedId, root.tagIndex),
+      root.query, root.bodyMatchIds)
   readonly property var selectedNote: Model.findNote(root.visibleNotes, root.selectedNoteId)
   readonly property bool searching: root.query.trim() !== ""
 
   // --- selection ------------------------------------------------------------
 
-  function indexOfFolder(id) {
-    for (var i = 0; i < folderItems.length; i++) {
-      if (folderItems[i].id === id) return i
+  function indexOfSource(kind, id) {
+    for (var i = 0; i < sourceItems.length; i++) {
+      if (sourceItems[i].kind === kind && sourceItems[i].id === id) return i
     }
     return 0
   }
@@ -99,9 +116,11 @@ Panel {
     return -1
   }
 
-  function selectFolder(id) {
-    selectedFolderId = String(id || "")
-    // The previous note is unlikely to be in the new folder; land on its first.
+  function selectSource(item) {
+    if (!item || item.kind === "header") return
+    selectedKind = item.kind
+    selectedId = String(item.id || "")
+    // The previous note is unlikely to be in the new source; land on its first.
     selectFirstNote()
   }
 
@@ -114,11 +133,22 @@ Panel {
     if (hostWidget) hostWidget.loadBody(selectedNoteId)
   }
 
-  function moveFolderSelection(delta) {
-    if (folderItems.length === 0) return
-    var next = indexOfFolder(selectedFolderId) + delta
-    next = Math.max(0, Math.min(folderItems.length - 1, next))
-    selectFolder(folderItems[next].id)
+  function moveSourceSelection(delta) {
+    if (sourceItems.length === 0 || delta === 0) return
+    var step = delta > 0 ? 1 : -1
+    var index = indexOfSource(selectedKind, selectedId)
+    var remaining = Math.abs(delta)
+    while (remaining > 0) {
+      var next = index + step
+      // Step over the TAGS caption rather than landing on it.
+      while (next >= 0 && next < sourceItems.length && sourceItems[next].kind === "header") {
+        next += step
+      }
+      if (next < 0 || next >= sourceItems.length) break
+      index = next
+      remaining--
+    }
+    selectSource(sourceItems[index])
   }
 
   function moveNoteSelection(delta) {
@@ -134,7 +164,7 @@ Panel {
   }
 
   function moveSelection(delta) {
-    if (activePane === 0) moveFolderSelection(delta)
+    if (activePane === 0) moveSourceSelection(delta)
     else moveNoteSelection(delta)
   }
 
@@ -387,7 +417,7 @@ Panel {
         readonly property int folderWidth: Style.space(190)
         readonly property int noteWidth: Style.space(250)
 
-        // Folders
+        // Sources: everything, the folder tree, then tags
         ListView {
           id: folderList
           anchors.top: parent.top
@@ -395,75 +425,109 @@ Panel {
           anchors.left: parent.left
           width: panes.folderWidth
           clip: true
-          model: root.folderItems
+          model: root.sourceItems
           spacing: Style.space(1)
           boundsBehavior: Flickable.StopAtBounds
-          currentIndex: root.indexOfFolder(root.selectedFolderId)
+          currentIndex: root.indexOfSource(root.selectedKind, root.selectedId)
           onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
 
           delegate: Rectangle {
-            id: folderRow
+            id: sourceRow
             required property var modelData
             required property int index
 
+            readonly property bool isHeader: sourceRow.modelData.kind === "header"
+            readonly property bool isTag: sourceRow.modelData.kind === Model.SOURCE_TAG
+            readonly property bool isAll: sourceRow.modelData.kind === Model.SOURCE_ALL
+            readonly property bool selected: !sourceRow.isHeader
+              && sourceRow.modelData.kind === root.selectedKind
+              && sourceRow.modelData.id === root.selectedId
+
             width: folderList.width
-            height: Style.space(26)
+            height: sourceRow.isHeader ? Style.space(22) : Style.space(26)
             radius: Style.cornerRadius
             color: {
-              if (folderRow.modelData.id === root.selectedFolderId)
+              if (sourceRow.selected)
                 return Style.selectedFillFor(root.contentForeground, Color.accent)
-              if (folderMouse.containsMouse)
+              if (sourceMouse.containsMouse && !sourceRow.isHeader)
                 return Style.hoverFillFor(root.contentForeground, Color.accent)
               return "transparent"
             }
 
+            // Caption for the tag section.
             Text {
-              id: folderGlyph
               anchors.left: parent.left
-              anchors.leftMargin: Style.space(6) + folderRow.modelData.depth * Style.space(10)
+              anchors.leftMargin: Style.space(6)
+              anchors.bottom: parent.bottom
+              anchors.bottomMargin: Style.space(4)
+              visible: sourceRow.isHeader
+              text: sourceRow.modelData.title
+              textFormat: Text.PlainText
+              color: root.mutedForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1.2
+              font.bold: true
+            }
+
+            Text {
+              id: sourceGlyph
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6) + sourceRow.modelData.depth * Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
-              text: folderRow.modelData.isAll
-                ? ""
-                : (folderRow.modelData.id === root.selectedFolderId ? "" : "")
-              color: folderRow.modelData.id === root.selectedFolderId
-                ? root.contentForeground : root.mutedForeground
+              visible: !sourceRow.isHeader
+              text: {
+                if (sourceRow.isAll) return ""
+                if (sourceRow.isTag) return ""
+                return sourceRow.selected ? "" : ""
+              }
+              color: sourceRow.selected ? root.contentForeground : root.mutedForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.bodySmall
             }
 
             Text {
-              anchors.left: folderGlyph.right
+              anchors.left: sourceGlyph.right
               anchors.leftMargin: Style.space(6)
-              anchors.right: folderCount.left
+              anchors.right: sourceCount.left
               anchors.rightMargin: Style.space(6)
               anchors.verticalCenter: parent.verticalCenter
-              text: folderRow.modelData.title
+              visible: !sourceRow.isHeader
+              text: sourceRow.modelData.title
               textFormat: Text.PlainText
               elide: Text.ElideRight
-              color: folderRow.modelData.id === root.selectedFolderId
+              color: sourceRow.selected
                 ? root.contentForeground : Qt.darker(root.contentForeground, 1.2)
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.bodySmall
             }
 
             Text {
-              id: folderCount
+              id: sourceCount
               anchors.right: parent.right
               anchors.rightMargin: Style.space(6)
               anchors.verticalCenter: parent.verticalCenter
-              text: folderRow.modelData.totalCount > 0 ? String(folderRow.modelData.totalCount) : ""
+              // A tag with no notes still shows its zero, so an empty tag does
+              // not look like a folder that failed to load.
+              visible: !sourceRow.isHeader
+              text: {
+                if (sourceRow.modelData.count < 0) return ""
+                if (sourceRow.modelData.count === 0 && !sourceRow.isTag) return ""
+                return String(sourceRow.modelData.count)
+              }
               color: root.mutedForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
             }
 
             MouseArea {
-              id: folderMouse
+              id: sourceMouse
               anchors.fill: parent
-              hoverEnabled: true
+              hoverEnabled: !sourceRow.isHeader
+              enabled: !sourceRow.isHeader
               onClicked: {
                 root.activePane = 0
-                root.selectFolder(folderRow.modelData.id)
+                root.selectSource(sourceRow.modelData)
               }
             }
           }
@@ -627,6 +691,9 @@ Panel {
             text: {
               if (!root.selectedNote) return ""
               var parts = [Model.formatUpdated(root.selectedNote.updated_time, root.now)]
+              if (root.selectedNoteTags.length > 0) {
+                parts.push(" " + root.selectedNoteTags.join(", "))
+              }
               if (root.bodyTruncated) parts.push("preview truncated")
               return parts.join("  ·  ")
             }

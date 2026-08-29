@@ -3,12 +3,74 @@
 A Joplin notes browser for the [Omarchy](https://omarchy.org/) shell bar.
 
 A note icon sits in the bar. Click it and it expands into a Joplin-like view:
-your folders on the left, that folder's notes in the middle, the selected note
-rendered on the right.
+your folders and tags on the left, that source's notes in the middle, the
+selected note rendered on the right.
 
 ![omajop](assets/panel.png)
 
-## How it reads your notes
+## Install
+
+Requires `sqlite3` (`omarchy pkg add sqlite`) and a Joplin desktop profile.
+
+```bash
+git clone https://github.com/renerocksai/omajop.git
+ln -s "$PWD/omajop" ~/.config/omarchy/plugins/org.ren.omajop
+omarchy bar put org.ren.omajop
+omarchy restart shell
+```
+
+`omarchy bar put` places it in the center section by default; pass
+`--section left|center|right` to choose another.
+
+> Plugin code is reloaded on save, but if the plugin directory is a **symlink**
+> the watcher does not see writes to the real path. Use `omarchy restart shell`
+> after editing.
+
+## Using it
+
+| Action | |
+|---|---|
+| Click the bar icon | Open / close the panel |
+| Middle-click the bar icon | Refresh now |
+| `↑` `↓` or `j` `k` | Move within the active column |
+| `←` `→` or `h` `l` | Switch between folders and notes |
+| `d` `u` | Scroll the preview half a pane down / up |
+| `g` `G` | Jump the preview to the top / bottom |
+| `Enter` | Open the selected note in Joplin |
+| `/` | Focus the filter |
+| `r` | Refresh |
+| `Esc` or `q` | Close |
+
+Double-clicking a note opens it in Joplin too.
+
+The left column lists **folders and then tags**. Selecting either scopes the
+note list; `↑`/`↓` walk the whole column, stepping over the `TAGS` caption. A
+note's own tags appear beside its timestamp in the preview.
+
+The filter searches **titles and note bodies** — a word that appears only inside
+a note still finds it.
+
+## Settings
+
+Set these on the widget's entry in `~/.config/omarchy/shell.json`, or with
+`omarchy bar set org.ren.omajop <key> <value>`.
+
+| Key | Default | |
+|---|---|---|
+| `profilePath` | `~/.config/joplin-desktop` | Joplin profile directory |
+| `sortBy` | `updated` | `updated` or `title` |
+| `refreshSeconds` | `60` | How often the note list is re-read |
+
+Every value is clamped in `Model.mjs` on the way in, because `shell.json` is
+hand-editable and the manifest schema is only a hint.
+
+## IPC
+
+```bash
+omarchy-shell org.ren.omajop open|close|toggle|refresh
+```
+
+## How it works
 
 omajop reads the Joplin desktop app's SQLite profile directly, read-only, via
 the `sqlite3` CLI. That is a deliberate choice over Joplin's Data API:
@@ -92,6 +154,19 @@ Known limitation: Markdown **table borders** still use Qt's default colour
 rather than the theme's. Fixing that would mean converting tables to styled
 HTML, which is a lot of parsing for a thin gain on a dark theme.
 
+### Tags
+
+Tags live in `tags`, joined to notes through `note_tags`. Two things make the
+counts less obvious than they look:
+
+- **Neither table has a `deleted_time` column.** A `note_tags` row outlives the
+  note it points at, so counts are taken against the notes actually on screen,
+  not the join table's own size. A tag whose notes are all in the trash reads 0,
+  not 3.
+- **A tag with no notes still has to appear**, or it looks like the list failed
+  to load. One `LEFT JOIN` query yields both, including the null row for an
+  empty tag, and duplicate pairings are counted once.
+
 ### Details that matter
 
 - Notes are filtered with `deleted_time = 0 AND is_conflict = 0`. The trash and
@@ -106,61 +181,6 @@ HTML, which is a lot of parsing for a thin gain on a dark theme.
 - The schema version is checked against the one this widget was written against
   (53). A mismatch shows a notice; it is not fatal, since the columns read here
   have been stable for a long time.
-
-## Install
-
-Requires `sqlite3` (`omarchy pkg add sqlite`) and a Joplin desktop profile.
-
-```bash
-git clone https://github.com/renerocksai/omajop.git
-ln -s "$PWD/omajop" ~/.config/omarchy/plugins/org.ren.omajop
-omarchy bar put org.ren.omajop
-omarchy restart shell
-```
-
-`omarchy bar put` places it in the center section by default; pass
-`--section left|center|right` to choose another.
-
-> Plugin code is reloaded on save, but if the plugin directory is a **symlink**
-> the watcher does not see writes to the real path. Use `omarchy restart shell`
-> after editing.
-
-## Using it
-
-| Action | |
-|---|---|
-| Click the bar icon | Open / close the panel |
-| Middle-click the bar icon | Refresh now |
-| `↑` `↓` or `j` `k` | Move within the active column |
-| `←` `→` or `h` `l` | Switch between folders and notes |
-| `d` `u` | Scroll the preview half a pane down / up |
-| `g` `G` | Jump the preview to the top / bottom |
-| `Enter` | Open the selected note in Joplin |
-| `/` | Focus the filter |
-| `r` | Refresh |
-| `Esc` or `q` | Close |
-
-Double-clicking a note opens it in Joplin too.
-
-## Settings
-
-Set these on the widget's entry in `~/.config/omarchy/shell.json`, or with
-`omarchy bar set org.ren.omajop <key> <value>`.
-
-| Key | Default | |
-|---|---|---|
-| `profilePath` | `~/.config/joplin-desktop` | Joplin profile directory |
-| `sortBy` | `updated` | `updated` or `title` |
-| `refreshSeconds` | `60` | How often the note list is re-read |
-
-Every value is clamped in `Model.mjs` on the way in, because `shell.json` is
-hand-editable and the manifest schema is only a hint.
-
-## IPC
-
-```bash
-omarchy-shell org.ren.omajop open|close|toggle|refresh
-```
 
 ## Development
 

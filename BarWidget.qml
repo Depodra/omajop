@@ -34,6 +34,8 @@ BarWidget {
   property var folderTree: []
   // id -> {mime, extension, title}, used to resolve `:/<id>` refs in a body.
   property var resourceMap: ({})
+  // { tags, notesByTag, tagsByNote } — see Model.buildTagIndex.
+  property var tagIndex: Model.emptyTagIndex()
 
   // Ids whose *body* matched the current filter, from Joplin's FTS index.
   // Titles are matched locally and instantly; this widens that result.
@@ -55,7 +57,7 @@ BarWidget {
   readonly property var bodySegments: Model.splitBody(bodyText, resourceMap, profileDir)
 
   readonly property bool loading: foldersProcess.running || notesProcess.running
-    || resourcesProcess.running || schemaProcess.running
+    || resourcesProcess.running || tagsProcess.running || schemaProcess.running
   readonly property int noteCount: noteRows ? noteRows.length : 0
   readonly property bool ready: dbState === "ready"
 
@@ -126,14 +128,28 @@ BarWidget {
   }
 
   function finishResources(exitCode) {
+    // Attachments are decorative: a failure here must not cost the notes.
+    resourceMap = ({})
+    if (exitCode === 0) {
+      try {
+        resourceMap = Model.buildResourceMap(Model.parseRows(resourcesStdout.text || ""))
+      } catch (error) {
+        // Leave the map empty; bodies still render, without their images.
+      }
+    }
+    tagsProcess.command = Model.sqliteArgv(databasePath, Model.tagsSql())
+    tagsProcess.running = true
+  }
+
+  function finishTags(exitCode) {
     try {
       var folders = Model.parseRows(foldersStdout.text || "")
       var notes = Model.parseRows(notesStdout.text || "")
-      // Attachments are decorative: a failure here must not cost the notes.
-      var resources = exitCode === 0 ? Model.parseRows(resourcesStdout.text || "") : []
+      // Tags are supplementary; without them the folder list still works.
+      var tagRows = exitCode === 0 ? Model.parseRows(tagsStdout.text || "") : []
       dbState = "ready"
       loadError = ""
-      resourceMap = Model.buildResourceMap(resources)
+      tagIndex = Model.buildTagIndex(tagRows, notes)
       setData(folders, notes)
     } catch (error) {
       failLoad(String(error), "The database returned unusable output.")
@@ -141,6 +157,7 @@ BarWidget {
   }
 
   function failLoad(detail, fallback) {
+    tagIndex = Model.emptyTagIndex()
     dbState = "ready"
     loadError = detail !== ""
       ? Model.truncate(Model.plainLine(detail), 320)
@@ -352,6 +369,13 @@ BarWidget {
     running: false
     stdout: StdioCollector { id: resourcesStdout; waitForEnd: true }
     onExited: function(exitCode) { root.finishResources(exitCode) }
+  }
+
+  Process {
+    id: tagsProcess
+    running: false
+    stdout: StdioCollector { id: tagsStdout; waitForEnd: true }
+    onExited: function(exitCode) { root.finishTags(exitCode) }
   }
 
   Process {
