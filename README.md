@@ -193,6 +193,20 @@ counts less obvious than they look:
   to load. One `LEFT JOIN` query yields both, including the null row for an
   empty tag, and duplicate pairings are counted once.
 
+### Notes still waiting on a key
+
+A note that synced in before its master key was available *is* encrypted on
+disk: Joplin serialises the whole item into `encryption_cipher_text` and leaves
+every other column at its default. Its title is therefore empty, so it would
+otherwise appear as a blank row called "Untitled" — which reads as a bug rather
+than a pending decrypt.
+
+![notes waiting on a key](assets/encrypted.png)
+
+They are counted in the header, carry a lock in the list, and the preview says
+what to do about it. Everything else still works on them: they sort by
+`updated_time` like any other note, and `Enter` hands them to Joplin.
+
 ### Details that matter
 
 - Notes are filtered with `deleted_time = 0 AND is_conflict = 0`. The trash and
@@ -200,8 +214,8 @@ counts less obvious than they look:
 - Joplin writes with a rollback journal, not WAL, so a reader can meet a write
   lock. Queries set `.timeout 3000` and wait rather than fail.
 - Bodies are plaintext at rest — Joplin applies end-to-end encryption at sync
-  time, not on disk. A note that *is* encrypted locally is labelled rather than
-  shown as ciphertext.
+  time, not on disk. See [Notes still waiting on a key](#notes-still-waiting-on-a-key)
+  for the case where that is not yet true.
 - Preview bodies are capped at 20,000 characters in SQL, so the JSON is always a
   complete document. A truncated preview says so.
 - The schema version is checked against the one this widget was written against

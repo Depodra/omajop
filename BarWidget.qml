@@ -59,6 +59,8 @@ BarWidget {
   readonly property bool loading: foldersProcess.running || notesProcess.running
     || resourcesProcess.running || tagsProcess.running || schemaProcess.running
   readonly property int noteCount: noteRows ? noteRows.length : 0
+  // Notes that synced in before their master key was available.
+  readonly property int encryptedCount: Model.countEncrypted(noteRows)
   readonly property bool ready: dbState === "ready"
 
   // --- data loading ---------------------------------------------------------

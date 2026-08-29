@@ -123,7 +123,8 @@ export function notesSql(sortBy) {
   const order = normalizeSortBy(sortBy) === SORT_TITLE
     ? "title COLLATE NOCASE ASC"
     : "updated_time DESC"
-  return "SELECT id, parent_id, title, is_todo, todo_completed, updated_time"
+  return "SELECT id, parent_id, title, is_todo, todo_completed, updated_time,"
+    + " encryption_applied"
     + " FROM notes"
     + " WHERE deleted_time = 0 AND is_conflict = 0"
     + " ORDER BY " + order
@@ -292,9 +293,27 @@ export function todoState(note) {
   return Number(note.todo_completed) ? "done" : "open"
 }
 
+// A note that arrived from sync before its master key was available carries
+// no usable title: Joplin serialises the whole item into encryption_cipher_text
+// and leaves the columns at their defaults. Without this it renders as a blank
+// row labelled "Untitled", which reads as a bug rather than a pending decrypt.
+export function isEncryptedNote(note) {
+  return !!(note && Number(note.encryption_applied))
+}
+
 export function noteTitle(note) {
   if (!note) return ""
+  if (isEncryptedNote(note)) return "Encrypted note"
   return String(note.title || "").trim() || "Untitled"
+}
+
+export function countEncrypted(notes) {
+  const rows = Array.isArray(notes) ? notes : []
+  let total = 0
+  for (let i = 0; i < rows.length; i++) {
+    if (isEncryptedNote(rows[i])) total++
+  }
+  return total
 }
 
 // --- formatting -------------------------------------------------------------

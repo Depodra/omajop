@@ -29,6 +29,7 @@ Panel {
   readonly property var bodySegments: hostWidget && hostWidget.bodySegments ? hostWidget.bodySegments : []
   readonly property var bodyMatchIds: hostWidget && hostWidget.bodyMatchIds ? hostWidget.bodyMatchIds : ({})
   readonly property var tagIndex: hostWidget && hostWidget.tagIndex ? hostWidget.tagIndex : Model.emptyTagIndex()
+  readonly property int encryptedCount: hostWidget ? hostWidget.encryptedCount : 0
   readonly property var selectedNoteTags: Model.tagsForNote(root.tagIndex, root.selectedNoteId)
   readonly property int bodyMarkup: hostWidget ? hostWidget.bodyMarkup : Model.MARKUP_MARKDOWN
   readonly property bool bodyEncrypted: hostWidget ? hostWidget.bodyEncrypted : false
@@ -287,7 +288,9 @@ Panel {
             if (root.hostState === "no-database") return "No profile"
             if (root.loading) return "Reading…"
             var total = root.noteRows.length
-            return total + (total === 1 ? " note" : " notes")
+            var label = total + (total === 1 ? " note" : " notes")
+            if (root.encryptedCount > 0) label += "  ·  " + root.encryptedCount + " encrypted"
+            return label
           }
           color: root.mutedForeground
           font.family: root.contentFontFamily
@@ -582,9 +585,11 @@ Panel {
               anchors.left: parent.left
               anchors.leftMargin: Style.space(6)
               anchors.verticalCenter: parent.verticalCenter
-              text: noteRow.todo === "done"
-                ? ""
-                : (noteRow.todo === "open" ? "" : "")
+              text: {
+                if (Model.isEncryptedNote(noteRow.modelData)) return ""
+                if (noteRow.todo === "done") return ""
+                return noteRow.todo === "open" ? "" : ""
+              }
               color: noteRow.todo === "done" ? root.mutedForeground : root.contentForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.bodySmall
@@ -755,7 +760,12 @@ Panel {
                 visible: text !== ""
                 text: {
                   if (root.bodyError !== "") return root.bodyError
-                  if (root.bodyEncrypted) return "This note is still encrypted locally."
+                  if (root.bodyEncrypted) {
+                    return "This note has not been decrypted yet.\n\n"
+                      + "It synced in before its master key was available. Open "
+                      + "Joplin and enter the master password, and it will "
+                      + "decrypt in the background."
+                  }
                   if (root.bodyLoading && root.bodyText === "") return "Loading…"
                   return ""
                 }
