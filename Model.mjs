@@ -15,18 +15,48 @@ export const ID_RE = /^[0-9a-f]{32}$/
 // The preview body is capped in SQL rather than by truncating stdout, so the
 // JSON we hand to JSON.parse is always a complete document.
 export const MAX_BODY_CHARS = 20000
-export const MAX_NOTES = 5000
 
-// Every other query is bounded the same way the note list already was. A
-// profile is local, but it is not therefore small or well formed: it syncs from
-// somewhere, and an unbounded row count or an unbounded text column is a
-// response big enough to sit in shell memory as JSON, twice.
-export const MAX_FOLDERS = 5000
-export const MAX_RESOURCES = 20000
-export const MAX_TAG_ROWS = 100000
-export const MAX_TITLE_CHARS = 500
-export const MAX_MIME_CHARS = 255
+// The ceiling on one query's response. This has to hold on the producing side
+// to mean anything: parseRows can only refuse a response after StdioCollector
+// has already buffered every byte of it, so a check there prevents the parse
+// and not the memory. The row limits below are therefore derived from this
+// budget rather than chosen next to it, and a query cannot emit more than it.
+export const MAX_STDOUT_CHARS = 8 * 1024 * 1024
+
+// JSON escaping can turn one character into six: a control character in a title
+// is written as a six-character escape. A bound on characters selected is only
+// a sixth of a bound on characters emitted.
+const JSON_ESCAPE_FACTOR = 6
+
+// Per row, for column names, punctuation, the fixed-width ids and the integer
+// columns. Deliberately generous: an over-estimate here makes the budget
+// conservative, which is the direction an unsafe bound should not err in.
+const ROW_OVERHEAD_CHARS = 256
+
+// A profile is local, which is not the same as small or well formed: it syncs
+// from somewhere. Every text column a query selects is cut to one of these.
+export const MAX_TITLE_CHARS = 200
+export const MAX_MIME_CHARS = 128
 export const MAX_EXTENSION_CHARS = 16
+
+// The worst case a response can reach, for a row count and the number of
+// characters of bounded text each row carries. Exported so a test can hold the
+// limits and the ceiling to each other rather than restating the arithmetic.
+export function worstCaseResponseChars(rows, textChars) {
+  return rows * (ROW_OVERHEAD_CHARS + textChars * JSON_ESCAPE_FACTOR)
+}
+
+function rowLimitFor(textChars) {
+  return Math.max(1, Math.floor(
+    MAX_STDOUT_CHARS / (ROW_OVERHEAD_CHARS + textChars * JSON_ESCAPE_FACTOR)))
+}
+
+export const MAX_FOLDERS = rowLimitFor(MAX_TITLE_CHARS)
+export const MAX_NOTES = rowLimitFor(MAX_TITLE_CHARS)
+export const MAX_RESOURCES = rowLimitFor(
+  MAX_TITLE_CHARS + MAX_MIME_CHARS + MAX_EXTENSION_CHARS)
+export const MAX_TAG_ROWS = rowLimitFor(MAX_TITLE_CHARS)
+export const MAX_SEARCH_RESULTS = rowLimitFor(0)
 
 // An attachment's bytes go to Qt's image decoder, which allocates whatever the
 // file's header asks it to. `size` is the byte length Joplin recorded, so it is
@@ -37,11 +67,6 @@ export const MAX_IMAGE_BYTES = 25 * 1024 * 1024
 // than sourceSize and does not stretch a smaller one up to it, so this caps
 // what a crafted header can ask for without changing how anything looks.
 export const MAX_IMAGE_PIXELS_PER_SIDE = 4096
-
-// A ceiling on what is parsed at all, in case a query is ever added without
-// bounds of its own. sqlite3 has already written it by the time this is
-// checked, so it caps the JSON parse and everything downstream, not the read.
-export const MAX_STDOUT_CHARS = 8 * 1024 * 1024
 
 // No query against a local file should take this long. One that does is not
 // going to finish usefully, so the process is killed rather than left holding
@@ -131,8 +156,10 @@ export function sqliteArgv(dbPath, sql) {
 // string is a valid "no rows" answer rather than a parse failure.
 export function parseRows(text) {
   const raw = String(text === undefined || text === null ? "" : text)
-  // Refuse rather than hand something unbounded to JSON.parse, which would
-  // double it in memory before anything got a chance to look at it.
+  // A backstop, not the bound: by the time this runs the collector has already
+  // buffered the whole response, so what it protects is the parse and what
+  // follows it. The producing side is bounded by the derived row limits, which
+  // is what keeps a response from reaching this size in the first place.
   if (raw.length > MAX_STDOUT_CHARS) {
     throw new Error("refusing to parse an oversized sqlite3 response")
   }
@@ -1006,7 +1033,6 @@ export function styleMarkdown(markdown, options) {
 // Lowercasing is what makes that safe: FTS4 only treats AND/OR/NOT/NEAR as
 // operators in uppercase, so a lowercase term can never become one.
 
-export const MAX_SEARCH_RESULTS = 5000
 export const MAX_SEARCH_TERMS = 16
 
 // Quote and operator characters, removed rather than escaped.

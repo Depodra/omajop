@@ -94,3 +94,79 @@ test("parseRows refuses an oversized response instead of parsing it", () => {
   // A response at the limit is still parsed normally.
   assert.deepEqual(Model.parseRows('[{"id":"a"}]'), [{ id: "a" }])
 })
+
+test("no query can emit more than the stdout ceiling", () => {
+  // The point of the ceiling is that it holds on the producing side. parseRows
+  // only sees a response after the collector has buffered all of it, so a limit
+  // that lets sqlite3 emit more than this would be a check that never helps.
+  const queries = [
+    ["folders", Model.MAX_FOLDERS, Model.MAX_TITLE_CHARS],
+    ["notes", Model.MAX_NOTES, Model.MAX_TITLE_CHARS],
+    ["resources", Model.MAX_RESOURCES,
+      Model.MAX_TITLE_CHARS + Model.MAX_MIME_CHARS + Model.MAX_EXTENSION_CHARS],
+    ["tags", Model.MAX_TAG_ROWS, Model.MAX_TITLE_CHARS],
+    ["search", Model.MAX_SEARCH_RESULTS, 0]
+  ]
+  for (const [name, rows, textChars] of queries) {
+    const worst = Model.worstCaseResponseChars(rows, textChars)
+    assert.ok(worst <= Model.MAX_STDOUT_CHARS,
+      name + " can emit " + worst + " chars, over the " + Model.MAX_STDOUT_CHARS + " ceiling")
+  }
+})
+
+test("the note body query is bounded too", () => {
+  // One row, but its body column is the largest single value read anywhere.
+  const worst = Model.worstCaseResponseChars(1, Model.MAX_BODY_CHARS)
+  assert.ok(worst <= Model.MAX_STDOUT_CHARS)
+})
+
+test("every derived row limit is a usable number", () => {
+  // A budget divided by an over-estimated row must still leave room to work in;
+  // a limit that collapsed to single digits would be a bound nobody could use.
+  for (const limit of [Model.MAX_FOLDERS, Model.MAX_NOTES, Model.MAX_RESOURCES,
+                       Model.MAX_TAG_ROWS, Model.MAX_SEARCH_RESULTS]) {
+    assert.ok(Number.isInteger(limit) && limit > 1000, "unusable limit: " + limit)
+  }
+})
+
+test("the per-row estimate is not smaller than a real worst-case row", () => {
+  // ROW_OVERHEAD_CHARS and the escape factor are the whole basis of the budget,
+  // so they are measured here rather than asserted. A control character is the
+  // worst case: JSON writes it as a six-character escape.
+  const ctrl = String.fromCharCode(1)
+  const hex = "a".repeat(32)
+
+  const rows = [
+    ["folders", { id: hex, title: ctrl.repeat(Model.MAX_TITLE_CHARS), parent_id: hex },
+      Model.MAX_TITLE_CHARS],
+    ["notes", { id: hex, parent_id: hex, title: ctrl.repeat(Model.MAX_TITLE_CHARS),
+      is_todo: 0, todo_completed: 0, updated_time: 1758000000000, encryption_applied: 0 },
+      Model.MAX_TITLE_CHARS],
+    ["resources", { id: hex, mime: ctrl.repeat(Model.MAX_MIME_CHARS),
+      file_extension: ctrl.repeat(Model.MAX_EXTENSION_CHARS),
+      title: ctrl.repeat(Model.MAX_TITLE_CHARS), size: 9007199254740991, encryption_applied: 0 },
+      Model.MAX_TITLE_CHARS + Model.MAX_MIME_CHARS + Model.MAX_EXTENSION_CHARS],
+    ["tags", { tag_id: hex, title: ctrl.repeat(Model.MAX_TITLE_CHARS), note_id: hex },
+      Model.MAX_TITLE_CHARS],
+    ["search", { id: hex }, 0]
+  ]
+
+  for (const [name, row, textChars] of rows) {
+    // One row's budget, plus a byte for the separator sqlite3 writes between them.
+    const budgeted = Model.worstCaseResponseChars(1, textChars)
+    const actual = JSON.stringify(row).length + 1
+    assert.ok(actual <= budgeted,
+      name + " row is " + actual + " chars, over its " + budgeted + " budget")
+  }
+})
+
+test("a non-BMP character cannot outgrow its budget either", () => {
+  // SQLite counts substr() in characters; JavaScript counts length in UTF-16
+  // units, and an emoji is two of them. Two units is still far under the six a
+  // control character costs, so the factor covers it — but not by assumption.
+  const astral = String.fromCodePoint(0x1f600)
+  const title = astral.repeat(Model.MAX_TITLE_CHARS)
+  const actual = JSON.stringify({ id: "a".repeat(32), title: title, parent_id: "b".repeat(32) }).length + 1
+  assert.ok(actual <= Model.worstCaseResponseChars(1, Model.MAX_TITLE_CHARS),
+    "astral row is " + actual + " chars")
+})
