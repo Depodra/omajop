@@ -79,7 +79,7 @@ BarWidget {
   function finishSqliteCheck(exitCode) {
     if (exitCode !== 0 || String(sqliteCheckStdout.text || "").trim() === "") {
       dbState = "no-sqlite"
-      loadError = "sqlite3 is not installed. Install it with: omarchy pkg add sqlite"
+      loadError = "sqlite3 was not found on PATH."
       setData([], [])
       return
     }

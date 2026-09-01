@@ -222,11 +222,11 @@ what to do about it. Everything else still works on them: they sort by
 
 ## Development
 
-To work on it, clone anywhere and symlink the checkout in under the plugin id:
+To work on it, clone the repository anywhere and symlink the checkout in under
+the plugin id:
 
 ```bash
-git clone https://github.com/renerocksai/omajop.git
-ln -s "$PWD/omajop" ~/.config/omarchy/plugins/io.github.renerocksai.omajop
+ln -s /path/to/omajop ~/.config/omarchy/plugins/io.github.renerocksai.omajop
 omarchy bar put io.github.renerocksai.omajop
 omarchy restart shell
 ```

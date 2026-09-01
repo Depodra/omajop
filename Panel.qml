@@ -917,7 +917,7 @@ Panel {
           horizontalAlignment: Text.AlignHCenter
           visible: root.hostState === "no-sqlite" || root.hostState === "no-database"
           text: root.hostState === "no-sqlite"
-            ? "omajop reads your notes with the sqlite3 CLI.\nInstall it with:  omarchy pkg add sqlite"
+            ? "omajop reads your notes with the sqlite3 CLI, which was not\nfound on PATH."
             : "Expected a Joplin desktop profile at:\n" + root.databasePath
           textFormat: Text.PlainText
           color: root.mutedForeground
