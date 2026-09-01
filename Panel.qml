@@ -858,10 +858,17 @@ Panel {
                     height: implicitWidth > 0
                       ? Math.round(implicitHeight * (width / implicitWidth))
                       : 0
-                    // No sourceSize: it is a decode target, not a cap, so Qt
-                    // would scale a small image UP to it and render it blurred.
-                    // Natural size drives implicitWidth instead, and mipmap
-                    // keeps a large image sharp once bound to the pane.
+                    // A decode bound, not a display size. Qt treats sourceSize
+                    // as a ceiling for a non-scalable image and will not stretch
+                    // a smaller one up to it, so natural size still drives
+                    // implicitWidth and nothing here looks different; what it
+                    // stops is a crafted header choosing the allocation. A
+                    // scalable image (SVG) does rasterise at this bound, which
+                    // is the point for the format most able to ask for a huge
+                    // one. mipmap keeps a large image sharp once bound to the
+                    // pane.
+                    sourceSize.width: Model.MAX_IMAGE_PIXELS_PER_SIDE
+                    sourceSize.height: Model.MAX_IMAGE_PIXELS_PER_SIDE
                     mipmap: true
                     smooth: true
                   }

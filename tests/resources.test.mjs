@@ -8,8 +8,10 @@ const GONE = "0123456789abcdef0123456789abcdef"
 const DIR = "/home/x/.config/joplin-desktop"
 
 const RESOURCES = Model.buildResourceMap([
-  { id: IMG, mime: "image/png", file_extension: "png", title: "WebClipper.png", encryption_applied: 0 },
-  { id: PDF, mime: "application/pdf", file_extension: "pdf", title: "Spec.pdf", encryption_applied: 0 }
+  { id: IMG, mime: "image/png", file_extension: "png", title: "WebClipper.png",
+    size: 24680, encryption_applied: 0 },
+  { id: PDF, mime: "application/pdf", file_extension: "pdf", title: "Spec.pdf",
+    size: 13579, encryption_applied: 0 }
 ])
 
 test("buildResourceMap keys by id and skips malformed rows", () => {
@@ -70,7 +72,7 @@ test("resourcePath refuses to leave the profile's resources directory", () => {
 test("an attachment with no usable path degrades to a label", () => {
   const resources = Model.buildResourceMap([
     { id: IMG, mime: "image/png", file_extension: "png/../../../etc/passwd",
-      title: "Bad.png", encryption_applied: 0 }
+      title: "Bad.png", size: 24680, encryption_applied: 0 }
   ])
   const segments = Model.splitBody("![alt](:/" + IMG + ")", resources, DIR)
   assert.equal(segments.length, 1)
@@ -231,4 +233,43 @@ test("externalLinkUrl refuses a link with no scheme at all", () => {
   assert.equal(Model.externalLinkUrl("#anchor", PROFILE), "")
   assert.equal(Model.externalLinkUrl("", PROFILE), "")
   assert.equal(Model.externalLinkUrl(null, PROFILE), "")
+})
+
+// --- image decode bounds ----------------------------------------------------
+
+function imageRow(size) {
+  return { id: IMG, mime: "image/png", file_extension: "png", title: "Big.png",
+           size: size, encryption_applied: 0 }
+}
+
+test("isRenderableImage caps by the recorded byte length", () => {
+  const ok = Model.buildResourceMap([imageRow(1024)])[IMG]
+  const tooBig = Model.buildResourceMap([imageRow(Model.MAX_IMAGE_BYTES + 1)])[IMG]
+  assert.ok(Model.isRenderableImage(ok))
+  assert.ok(!Model.isRenderableImage(tooBig))
+  // Exactly at the cap is still rendered.
+  assert.ok(Model.isRenderableImage(Model.buildResourceMap([imageRow(Model.MAX_IMAGE_BYTES)])[IMG]))
+})
+
+test("isRenderableImage fails closed on a size that was never recorded", () => {
+  // Joplin's schema defaults size to -1. An unmeasured resource is not a small
+  // one; nothing is known about it, so it does not reach the decoder.
+  assert.ok(!Model.isRenderableImage(Model.buildResourceMap([imageRow(-1)])[IMG]))
+  const missing = Model.buildResourceMap([
+    { id: IMG, mime: "image/png", file_extension: "png", title: "x", encryption_applied: 0 }
+  ])[IMG]
+  assert.ok(!Model.isRenderableImage(missing))
+  // A non-image is never renderable as one, whatever its size.
+  assert.ok(!Model.isRenderableImage(RESOURCES[PDF]))
+})
+
+test("an oversized image is not previewed but stays reachable as a link", () => {
+  const resources = Model.buildResourceMap([imageRow(Model.MAX_IMAGE_BYTES + 1)])
+  const segments = Model.splitBody("![alt](:/" + IMG + ")", resources, DIR)
+  // No image segment: nothing was handed to the decoder.
+  assert.equal(segments.filter(s => s.kind === "image").length, 0)
+  assert.equal(segments.length, 1)
+  assert.ok(segments[0].text.includes("image not previewed"))
+  // The file is still openable by the reader, through the link handler.
+  assert.ok(segments[0].text.includes("file://"))
 })

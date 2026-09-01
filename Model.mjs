@@ -28,6 +28,16 @@ export const MAX_TITLE_CHARS = 500
 export const MAX_MIME_CHARS = 255
 export const MAX_EXTENSION_CHARS = 16
 
+// An attachment's bytes go to Qt's image decoder, which allocates whatever the
+// file's header asks it to. `size` is the byte length Joplin recorded, so it is
+// the one bound available before the decoder is handed anything at all.
+export const MAX_IMAGE_BYTES = 25 * 1024 * 1024
+
+// A decode bound, in pixels per side. For a raster image Qt loads at no more
+// than sourceSize and does not stretch a smaller one up to it, so this caps
+// what a crafted header can ask for without changing how anything looks.
+export const MAX_IMAGE_PIXELS_PER_SIDE = 4096
+
 // A ceiling on what is parsed at all, in case a query is ever added without
 // bounds of its own. sqlite3 has already written it by the time this is
 // checked, so it caps the JSON parse and everything downstream, not the read.
@@ -448,7 +458,7 @@ export function resourcesSql() {
     + " substr(mime, 1, " + MAX_MIME_CHARS + ") AS mime,"
     + " substr(file_extension, 1, " + MAX_EXTENSION_CHARS + ") AS file_extension,"
     + " substr(title, 1, " + MAX_TITLE_CHARS + ") AS title,"
-    + " encryption_applied"
+    + " size, encryption_applied"
     + " FROM resources"
     + " LIMIT " + MAX_RESOURCES + ";"
 }
@@ -464,6 +474,8 @@ export function buildResourceMap(rows) {
       mime: String(list[i].mime || ""),
       extension: String(list[i].file_extension || ""),
       title: String(list[i].title || ""),
+      // Joplin's schema defaults this to -1, meaning it was never recorded.
+      size: Number(list[i].size),
       encrypted: !!Number(list[i].encryption_applied)
     }
   }
@@ -472,6 +484,17 @@ export function buildResourceMap(rows) {
 
 export function isImageResource(resource) {
   return !!resource && resource.mime.indexOf("image/") === 0
+}
+
+// Whether an image may be handed to the decoder at all. This fails closed on a
+// size Joplin never recorded: an unmeasured resource is not a small one, it is
+// one nothing is known about, and the byte cap is the only bound that applies
+// before the file is opened.
+export function isRenderableImage(resource) {
+  if (!isImageResource(resource)) return false
+  const size = Number(resource.size)
+  if (!isFinite(size) || size < 0) return false
+  return size <= MAX_IMAGE_BYTES
 }
 
 // An extension comes out of the database and is appended to a path, so it is
@@ -654,6 +677,16 @@ export function splitBody(body, resources, profileDir) {
     }
 
     if (wantsEmbed && isImageResource(resource)) {
+      if (!isRenderableImage(resource)) {
+        // Past the byte cap, or a length that was never recorded. It is not
+        // given to the decoder, but stays reachable as a link the reader can
+        // open deliberately, in something that is not this process.
+        const name = label !== ""
+          ? label
+          : (resource.title !== "" ? resource.title : "image")
+        buffer += "[" + name + "](" + fileUrl(path) + ") (image not previewed)"
+        continue
+      }
       flush()
       segments.push({
         kind: "image",
