@@ -816,7 +816,10 @@ Panel {
                       var styling = {
                         linkColor: root.linkColorHex,
                         fontSizePx: Style.font.bodySmall,
-                        tableBorderColor: root.tableBorderHex
+                        tableBorderColor: root.tableBorderHex,
+                        // Bounds which file:// hrefs survive sanitising, to the
+                        // same attachments the link handler would open.
+                        profileDir: root.profileDir
                       }
                       // Qt renders anchors and code the same untheme-aware way
                       // in both formats; only the rewriting differs.

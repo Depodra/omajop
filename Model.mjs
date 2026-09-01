@@ -927,13 +927,16 @@ function styleInline(chunk, options) {
   let match
   INLINE_CODE_RE.lastIndex = 0
   while ((match = INLINE_CODE_RE.exec(chunk)) !== null) {
-    parts.push(styleLinksInProse(chunk.slice(last, match.index), options.color))
+    parts.push(styleLinksInProse(
+      neutralizeEmbeds(chunk.slice(last, match.index)), options.color))
+    // A code span is displayed, not interpreted: whatever it holds is escaped
+    // by codeSpan and never becomes an element, so it is left as written.
     parts.push(options.size !== ""
       ? codeSpan(match[0].slice(1, -1), options.size)
       : match[0])
     last = match.index + match[0].length
   }
-  parts.push(styleLinksInProse(chunk.slice(last), options.color))
+  parts.push(styleLinksInProse(neutralizeEmbeds(chunk.slice(last)), options.color))
   return parts.join("")
 }
 
@@ -1040,6 +1043,170 @@ export function searchSql(expression) {
 // colour is chosen for a white background and is routinely illegible on a dark
 // one, and consistency between note types matters more here than honouring it.
 
+// A stored HTML note is rendered as RichText, and Qt will fetch what that HTML
+// references while laying it out — an <img> pointing at a URL is loaded without
+// anyone clicking anything. A note body arrives over sync, so before any of it
+// reaches a Text it is reduced to a subset that cannot reach outside itself.
+//
+// Joplin's own attachments never get here: splitBody has already lifted
+// `:/<id>` references out into image segments the panel renders itself. An
+// <img> that survives to this point is therefore pointing somewhere else.
+
+// Elements whose content is not text. Dropped whole, closed or not.
+const HTML_DROP_WITH_CONTENT = [
+  "script", "style", "iframe", "object", "embed", "video", "audio", "canvas",
+  "svg", "math", "template", "noscript", "applet", "frame", "frameset", "head",
+  "form", "map", "portal"
+]
+
+const ALLOWED_HTML_TAGS = [
+  "a", "abbr", "b", "big", "blockquote", "br", "caption", "center", "cite",
+  "code", "col", "colgroup", "dd", "del", "div", "dl", "dt", "em", "font",
+  "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins", "kbd", "li", "mark",
+  "ol", "p", "pre", "q", "s", "samp", "small", "span", "strike", "strong",
+  "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "tt",
+  "u", "ul", "var"
+]
+
+// No src, no srcset, no background, no formaction: nothing that names another
+// resource. `on*` handlers are absent by omission rather than by a rule.
+const ALLOWED_HTML_ATTRIBUTES = [
+  "href", "title", "align", "valign", "colspan", "rowspan", "span", "start",
+  "width", "height", "border", "cellpadding", "cellspacing", "bordercolor",
+  "color", "face", "size", "dir", "style"
+]
+
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g
+const HTML_DECLARATION_RE = /<![^>]*>/g
+const HTML_IMG_RE = /<img\b([^>]*)>/gi
+const HTML_TAG_RE = /<(\/?)([A-Za-z][A-Za-z0-9]*)\b([^>]*)>/g
+const HTML_ATTRIBUTE_RE =
+  /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>=`]+))/g
+
+// url() is how a style attribute fetches something; expression() is how an old
+// one ran script. A declaration carrying either is dropped, not rewritten.
+function sanitizeStyleDeclarations(value) {
+  const parts = String(value === undefined || value === null ? "" : value).split(";")
+  const kept = []
+  for (let i = 0; i < parts.length; i++) {
+    const declaration = parts[i].trim()
+    if (declaration === "") continue
+    if (/url\s*\(/i.test(declaration)) continue
+    if (/expression\s*\(/i.test(declaration)) continue
+    if (/[<>"']/.test(declaration)) continue
+    kept.push(declaration)
+  }
+  return kept.join(";")
+}
+
+function sanitizeHtmlAttributes(tag, rawAttributes, profileDir) {
+  let out = ""
+  HTML_ATTRIBUTE_RE.lastIndex = 0
+  let match
+  while ((match = HTML_ATTRIBUTE_RE.exec(rawAttributes)) !== null) {
+    const name = match[1].toLowerCase()
+    if (ALLOWED_HTML_ATTRIBUTES.indexOf(name) === -1) continue
+    let value = match[3] !== undefined
+      ? match[3]
+      : (match[4] !== undefined ? match[4] : (match[5] || ""))
+
+    if (name === "href") {
+      // Only an anchor may carry one, and only to somewhere it may go.
+      if (tag !== "a") continue
+      value = externalLinkUrl(value, profileDir)
+      if (value === "") continue
+    }
+    if (name === "style") {
+      value = sanitizeStyleDeclarations(value)
+      if (value === "") continue
+    }
+    out += " " + name + '="' + escapeAttribute(value) + '"'
+  }
+  return out
+}
+
+// Attributes that name another resource or run code. The tag they sit on may be
+// ordinary formatting, so these are removed and the element is kept.
+const LOADING_ATTRIBUTE_RE =
+  /\s(?:on[a-z]+|src|srcset|data|poster|background|formaction|xlink:href|lowsrc|dynsrc)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
+const STYLE_ATTRIBUTE_RE = /(\sstyle\s*=\s*)("([^"]*)"|'([^']*)')/gi
+
+function stripLoadingAttributes(rawAttributes) {
+  let out = String(rawAttributes === undefined || rawAttributes === null ? "" : rawAttributes)
+  out = out.replace(LOADING_ATTRIBUTE_RE, "")
+  out = out.replace(STYLE_ATTRIBUTE_RE, function (whole, lead, quoted, double, single) {
+    const value = double !== undefined ? double : (single !== undefined ? single : "")
+    const cleaned = sanitizeStyleDeclarations(value)
+    return cleaned === "" ? "" : lead + '"' + escapeAttribute(cleaned) + '"'
+  })
+  return out
+}
+
+// Qt's Markdown importer honours inline HTML — that is the whole premise of the
+// anchor and code rewriting above — so a Markdown note can carry an embed just
+// as a stored HTML one can, and the same implicit load follows from it.
+//
+// Only the constructs that reach outside the note are taken out here, and the
+// element that carries them is otherwise left alone: a note's own <b> is not
+// this function's business. It runs on prose slices only, never on a code span
+// or a fence, so a note that *displays* <img src=...> as code still shows it.
+export function neutralizeEmbeds(text) {
+  let out = String(text === undefined || text === null ? "" : text)
+
+  for (let i = 0; i < HTML_DROP_WITH_CONTENT.length; i++) {
+    const tag = HTML_DROP_WITH_CONTENT[i]
+    out = out.replace(
+      new RegExp("<" + tag + "\\b[\\s\\S]*?<\\/" + tag + "\\s*>", "gi"), "")
+    out = out.replace(new RegExp("<\\/?" + tag + "\\b[^>]*>", "gi"), "")
+  }
+
+  out = out.replace(HTML_IMG_RE, function (whole, attributes) {
+    const alt = ALT_RE.exec(attributes)
+    return alt && alt[1] ? escapeText(alt[1]) : ""
+  })
+
+  out = out.replace(HTML_TAG_RE, function (whole, closing, rawName, rawAttributes) {
+    if (closing === "/") return whole
+    return "<" + rawName + stripLoadingAttributes(rawAttributes) + ">"
+  })
+
+  return out
+}
+
+export function sanitizeHtml(html, profileDir) {
+  let text = String(html === undefined || html === null ? "" : html)
+
+  // A comment can hold a tag that a later pass would then see; remove both
+  // comments and declarations before anything looks for elements.
+  text = text.replace(HTML_COMMENT_RE, "")
+  text = text.replace(HTML_DECLARATION_RE, "")
+
+  for (let i = 0; i < HTML_DROP_WITH_CONTENT.length; i++) {
+    const tag = HTML_DROP_WITH_CONTENT[i]
+    text = text.replace(
+      new RegExp("<" + tag + "\\b[\\s\\S]*?<\\/" + tag + "\\s*>", "gi"), "")
+    // An unclosed one would otherwise leave its opening tag behind.
+    text = text.replace(new RegExp("<\\/?" + tag + "\\b[^>]*>", "gi"), "")
+  }
+
+  // Any <img> still here names something outside the note. Its alt text is
+  // kept, since that is the part the reader was meant to get.
+  text = text.replace(HTML_IMG_RE, function (whole, attributes) {
+    const alt = ALT_RE.exec(attributes)
+    return alt && alt[1] ? escapeText(alt[1]) : ""
+  })
+
+  text = text.replace(HTML_TAG_RE, function (whole, closing, rawName, rawAttributes) {
+    const name = rawName.toLowerCase()
+    if (ALLOWED_HTML_TAGS.indexOf(name) === -1) return ""
+    if (closing === "/") return "</" + name + ">"
+    const selfClosing = /\/\s*$/.test(rawAttributes) ? " /" : ""
+    return "<" + name + sanitizeHtmlAttributes(name, rawAttributes, profileDir) + selfClosing + ">"
+  })
+
+  return text
+}
+
 const ANCHOR_RE = /<a\b([^>]*?)(\/?)>/gi
 const CODE_OPEN_RE = /<(code|pre)\b([^>]*?)(\/?)>/gi
 
@@ -1060,8 +1227,10 @@ function withStyle(attributes, declaration) {
 }
 
 export function styleHtml(html, options) {
-  let text = String(html === undefined || html === null ? "" : html)
   const settings = options || {}
+  // Sanitising here rather than at the call site means there is one way for an
+  // HTML note to reach a Text, and it goes through this.
+  let text = sanitizeHtml(html, settings.profileDir)
   const color = sanitizeColor(settings.linkColor)
   const size = sanitizeFontSize(settings.fontSizePx)
 
