@@ -17,6 +17,27 @@ export const ID_RE = /^[0-9a-f]{32}$/
 export const MAX_BODY_CHARS = 20000
 export const MAX_NOTES = 5000
 
+// Every other query is bounded the same way the note list already was. A
+// profile is local, but it is not therefore small or well formed: it syncs from
+// somewhere, and an unbounded row count or an unbounded text column is a
+// response big enough to sit in shell memory as JSON, twice.
+export const MAX_FOLDERS = 5000
+export const MAX_RESOURCES = 20000
+export const MAX_TAG_ROWS = 100000
+export const MAX_TITLE_CHARS = 500
+export const MAX_MIME_CHARS = 255
+export const MAX_EXTENSION_CHARS = 16
+
+// A ceiling on what is parsed at all, in case a query is ever added without
+// bounds of its own. sqlite3 has already written it by the time this is
+// checked, so it caps the JSON parse and everything downstream, not the read.
+export const MAX_STDOUT_CHARS = 8 * 1024 * 1024
+
+// No query against a local file should take this long. One that does is not
+// going to finish usefully, so the process is killed rather than left holding
+// a lock and a pipe for the rest of the session.
+export const QUERY_TIMEOUT_MS = 15000
+
 // The desktop app writes with a rollback journal, not WAL, so a reader can
 // meet a write lock. Wait rather than fail.
 export const BUSY_TIMEOUT_MS = 3000
@@ -99,7 +120,13 @@ export function sqliteArgv(dbPath, sql) {
 // sqlite3 -json prints nothing at all for an empty result set, so an empty
 // string is a valid "no rows" answer rather than a parse failure.
 export function parseRows(text) {
-  const trimmed = String(text === undefined || text === null ? "" : text).trim()
+  const raw = String(text === undefined || text === null ? "" : text)
+  // Refuse rather than hand something unbounded to JSON.parse, which would
+  // double it in memory before anything got a chance to look at it.
+  if (raw.length > MAX_STDOUT_CHARS) {
+    throw new Error("refusing to parse an oversized sqlite3 response")
+  }
+  const trimmed = raw.trim()
   if (trimmed === "") return []
   const rows = JSON.parse(trimmed)
   return Array.isArray(rows) ? rows : []
@@ -112,9 +139,12 @@ export function schemaSql() {
 }
 
 export function foldersSql() {
-  return "SELECT id, title, parent_id FROM folders"
+  return "SELECT id,"
+    + " substr(title, 1, " + MAX_TITLE_CHARS + ") AS title,"
+    + " parent_id FROM folders"
     + " WHERE deleted_time = 0"
-    + " ORDER BY title COLLATE NOCASE ASC;"
+    + " ORDER BY title COLLATE NOCASE ASC"
+    + " LIMIT " + MAX_FOLDERS + ";"
 }
 
 // `deleted_time = 0` excludes the trash and `is_conflict = 0` the conflict
@@ -123,7 +153,9 @@ export function notesSql(sortBy) {
   const order = normalizeSortBy(sortBy) === SORT_TITLE
     ? "title COLLATE NOCASE ASC"
     : "updated_time DESC"
-  return "SELECT id, parent_id, title, is_todo, todo_completed, updated_time,"
+  return "SELECT id, parent_id,"
+    + " substr(title, 1, " + MAX_TITLE_CHARS + ") AS title,"
+    + " is_todo, todo_completed, updated_time,"
     + " encryption_applied"
     + " FROM notes"
     + " WHERE deleted_time = 0 AND is_conflict = 0"
@@ -412,8 +444,13 @@ const RESOURCE_REF_RE = new RegExp(
 const ALT_RE = /\balt\s*=\s*["']([^"']*)["']/i
 
 export function resourcesSql() {
-  return "SELECT id, mime, file_extension, title, encryption_applied"
-    + " FROM resources;"
+  return "SELECT id,"
+    + " substr(mime, 1, " + MAX_MIME_CHARS + ") AS mime,"
+    + " substr(file_extension, 1, " + MAX_EXTENSION_CHARS + ") AS file_extension,"
+    + " substr(title, 1, " + MAX_TITLE_CHARS + ") AS title,"
+    + " encryption_applied"
+    + " FROM resources"
+    + " LIMIT " + MAX_RESOURCES + ";"
 }
 
 export function buildResourceMap(rows) {
@@ -440,8 +477,7 @@ export function isImageResource(resource) {
 // An extension comes out of the database and is appended to a path, so it is
 // bounded to a short plain token. A separator, a traversal, a control character
 // or anything else yields no extension rather than a rewritten path.
-export const MAX_EXTENSION_CHARS = 16
-const SAFE_EXTENSION_RE = /^[A-Za-z0-9]{1,16}$/
+const SAFE_EXTENSION_RE = new RegExp("^[A-Za-z0-9]{1," + MAX_EXTENSION_CHARS + "}$")
 
 export function sanitizeExtension(value) {
   const ext = String(value === undefined || value === null ? "" : value)
@@ -1023,9 +1059,12 @@ export const SOURCE_TAG = "tag"
 // One query rather than two: the LEFT JOIN also yields a row for a tag that has
 // no notes, so an empty tag still appears in the list.
 export function tagsSql() {
-  return "SELECT t.id AS tag_id, t.title AS title, nt.note_id AS note_id"
+  return "SELECT t.id AS tag_id,"
+    + " substr(t.title, 1, " + MAX_TITLE_CHARS + ") AS title,"
+    + " nt.note_id AS note_id"
     + " FROM tags t LEFT JOIN note_tags nt ON nt.tag_id = t.id"
-    + " ORDER BY t.title COLLATE NOCASE ASC;"
+    + " ORDER BY t.title COLLATE NOCASE ASC"
+    + " LIMIT " + MAX_TAG_ROWS + ";"
 }
 
 // Returns { tags, notesByTag, tagsByNote } where `tags` keeps the query's

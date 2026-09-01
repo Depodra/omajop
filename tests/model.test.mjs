@@ -58,3 +58,39 @@ test("settings are clamped on the way in", () => {
   assert.equal(Model.normalizeSortBy("title"), "title")
   assert.equal(Model.normalizeSortBy(undefined), "updated")
 })
+
+test("every list query bounds its row count", () => {
+  assert.match(Model.foldersSql(), /LIMIT \d+;$/)
+  assert.match(Model.notesSql("updated"), /LIMIT \d+;$/)
+  assert.match(Model.resourcesSql(), /LIMIT \d+;$/)
+  assert.match(Model.tagsSql(), /LIMIT \d+;$/)
+  assert.match(Model.searchSql("a*"), /LIMIT \d+;$/)
+})
+
+test("every list query bounds the text columns it selects", () => {
+  // A title, a mime or an extension is unbounded in the schema; the response
+  // has to be bounded before it becomes JSON in shell memory.
+  assert.ok(Model.foldersSql().includes("substr(title, 1, " + Model.MAX_TITLE_CHARS + ")"))
+  assert.ok(Model.notesSql("updated").includes("substr(title, 1, " + Model.MAX_TITLE_CHARS + ")"))
+  assert.ok(Model.resourcesSql().includes("substr(mime, 1, " + Model.MAX_MIME_CHARS + ")"))
+  assert.ok(Model.resourcesSql().includes(
+    "substr(file_extension, 1, " + Model.MAX_EXTENSION_CHARS + ")"))
+  assert.ok(Model.tagsSql().includes("substr(t.title, 1, " + Model.MAX_TITLE_CHARS + ")"))
+})
+
+test("bounded queries keep the column names the model reads", () => {
+  // substr() without an alias would rename the column and silently empty it.
+  for (const sql of [Model.foldersSql(), Model.notesSql("updated")]) {
+    assert.ok(sql.includes("AS title"))
+  }
+  assert.ok(Model.resourcesSql().includes("AS mime"))
+  assert.ok(Model.resourcesSql().includes("AS file_extension"))
+  assert.ok(Model.tagsSql().includes("AS title"))
+})
+
+test("parseRows refuses an oversized response instead of parsing it", () => {
+  const huge = "x".repeat(Model.MAX_STDOUT_CHARS + 1)
+  assert.throws(() => Model.parseRows(huge), /oversized/)
+  // A response at the limit is still parsed normally.
+  assert.deepEqual(Model.parseRows('[{"id":"a"}]'), [{ id: "a" }])
+})

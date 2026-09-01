@@ -28,6 +28,8 @@ BarWidget {
   // "checking" | "no-sqlite" | "no-database" | "ready"
   property string dbState: "checking"
   property string loadError: ""
+  // Set by a watchdog when it stops a query, read once by failLoad.
+  property bool queryTimedOut: false
   property string schemaNotice: ""
   property var folderRows: []
   property var noteRows: []
@@ -69,6 +71,8 @@ BarWidget {
 
   function refresh() {
     if (loading) return
+    // A fresh pass starts without the previous one's timeout.
+    queryTimedOut = false
     if (dbState === "ready") {
       loadSchema()
       return
@@ -161,9 +165,15 @@ BarWidget {
   function failLoad(detail, fallback) {
     tagIndex = Model.emptyTagIndex()
     dbState = "ready"
-    loadError = detail !== ""
-      ? Model.truncate(Model.plainLine(detail), 320)
-      : fallback
+    // A killed process exits non-zero with nothing on stderr, so without this
+    // a timeout would surface as the generic "could not read" fallback.
+    loadError = queryTimedOut
+      ? "A database read took longer than "
+        + Math.round(Model.QUERY_TIMEOUT_MS / 1000) + "s and was stopped."
+      : (detail !== ""
+        ? Model.truncate(Model.plainLine(detail), 320)
+        : fallback)
+    queryTimedOut = false
     setData([], [])
   }
 
@@ -322,6 +332,23 @@ BarWidget {
     onTriggered: root.refresh()
   }
 
+  // Every sqlite3 read gets a deadline. The collector has no byte limit to set
+  // and the queries are bounded in SQL, but a process can still block on a lock
+  // or a stalled filesystem, and one that has not finished by now is not going
+  // to. Killing it releases the pipe and the read lock; the exit that follows
+  // travels the ordinary failure path.
+  component QueryWatchdog: Timer {
+    required property var query
+    interval: Model.QUERY_TIMEOUT_MS
+    repeat: false
+    running: query.running
+    onTriggered: {
+      if (!query.running) return
+      root.queryTimedOut = true
+      query.running = false
+    }
+  }
+
   Process {
     id: sqliteCheckProcess
     running: false
@@ -330,12 +357,16 @@ BarWidget {
     onExited: function(exitCode) { root.finishSqliteCheck(exitCode) }
   }
 
+  QueryWatchdog { query: sqliteCheckProcess }
+
   Process {
     id: schemaProcess
     running: false
     stdout: StdioCollector { id: schemaStdout; waitForEnd: true }
     onExited: function(exitCode) { root.finishSchema(exitCode) }
   }
+
+  QueryWatchdog { query: schemaProcess }
 
   Process {
     id: foldersProcess
@@ -345,6 +376,8 @@ BarWidget {
     onExited: function(exitCode) { root.finishFolders(exitCode) }
   }
 
+  QueryWatchdog { query: foldersProcess }
+
   Process {
     id: notesProcess
     running: false
@@ -352,6 +385,8 @@ BarWidget {
     stderr: StdioCollector { id: notesStderr; waitForEnd: true }
     onExited: function(exitCode) { root.finishNotes(exitCode) }
   }
+
+  QueryWatchdog { query: notesProcess }
 
   Timer {
     id: searchDebounce
@@ -366,12 +401,16 @@ BarWidget {
     onExited: function(exitCode) { root.finishSearch(exitCode) }
   }
 
+  QueryWatchdog { query: searchProcess }
+
   Process {
     id: resourcesProcess
     running: false
     stdout: StdioCollector { id: resourcesStdout; waitForEnd: true }
     onExited: function(exitCode) { root.finishResources(exitCode) }
   }
+
+  QueryWatchdog { query: resourcesProcess }
 
   Process {
     id: tagsProcess
@@ -380,6 +419,8 @@ BarWidget {
     onExited: function(exitCode) { root.finishTags(exitCode) }
   }
 
+  QueryWatchdog { query: tagsProcess }
+
   Process {
     id: bodyProcess
     running: false
@@ -387,6 +428,8 @@ BarWidget {
     stderr: StdioCollector { id: bodyStderr; waitForEnd: true }
     onExited: function(exitCode) { root.finishBody(exitCode) }
   }
+
+  QueryWatchdog { query: bodyProcess }
 
   Loader {
     id: panelLoader
