@@ -513,6 +513,59 @@ export function fileUrl(path) {
   return "file://" + encodeURI(value)
 }
 
+// --- links out of a note ----------------------------------------------------
+//
+// A link in a rendered note is note-controlled: the body is data that arrived
+// over sync, and activating one hands a string to xdg-open, which will dispatch
+// on whatever scheme it names. So only schemes that mean something for a note
+// are opened, and only after the URL survives inspection.
+
+export const SAFE_LINK_SCHEMES = ["http", "https"]
+
+// A control character can truncate or split what a handler sees, so a URL
+// carrying one is not opened at all.
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/
+const SCHEME_RE = /^([A-Za-z][A-Za-z0-9+.-]*):/
+
+// Returns the URL to open, or "" to refuse. `profileDir` bounds file:// links
+// to attachments in this profile; without it, no file:// link is opened.
+export function externalLinkUrl(link, profileDir) {
+  const url = String(link === undefined || link === null ? "" : link).trim()
+  if (url === "" || CONTROL_CHAR_RE.test(url) || /\s/.test(url)) return ""
+
+  const schemeMatch = SCHEME_RE.exec(url)
+  // A relative or scheme-less link has no meaning outside the note it came
+  // from, and guessing one for it is how a surprising handler gets invoked.
+  if (!schemeMatch) return ""
+  const scheme = schemeMatch[1].toLowerCase()
+
+  if (scheme === "file") {
+    if (url.slice(0, 7) !== "file://") return ""
+    const rest = url.slice(7)
+    // A query or fragment on a file URL is not part of the path, and would let
+    // the containment check pass on a path the opener never sees.
+    if (rest.indexOf("?") !== -1 || rest.indexOf("#") !== -1) return ""
+    let path
+    try {
+      path = decodeURI(rest)
+    } catch (error) {
+      return ""
+    }
+    if (CONTROL_CHAR_RE.test(path)) return ""
+    return isInsideDirectory(resourcesDirectory(profileDir), path) ? url : ""
+  }
+
+  if (SAFE_LINK_SCHEMES.indexOf(scheme) === -1) return ""
+  if (url.slice(scheme.length, scheme.length + 3) !== "://") return ""
+
+  // https://real.example@evil.example/ opens evil.example while reading as
+  // real.example, so a URL carrying credentials is refused rather than opened.
+  const authority = url.slice(scheme.length + 3).split(/[/?#]/)[0]
+  if (authority === "" || authority.indexOf("@") !== -1) return ""
+
+  return url
+}
+
 // Splits a note body into an ordered list of segments:
 //   { kind: "text",  text }                  Markdown, rendered by a Text
 //   { kind: "image", url, title, missing }   rendered by an Image

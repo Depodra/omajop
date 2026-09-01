@@ -23,6 +23,8 @@ Panel {
   readonly property string schemaNotice: hostWidget ? hostWidget.schemaNotice : ""
   readonly property bool loading: hostWidget ? hostWidget.loading : false
   readonly property string databasePath: hostWidget ? hostWidget.databasePath : ""
+  // Bounds which file:// links in a note body may be opened.
+  readonly property string profileDir: hostWidget ? hostWidget.profileDir : ""
   property date now: hostWidget ? hostWidget.now : new Date()
 
   readonly property string bodyText: hostWidget ? hostWidget.bodyText : ""
@@ -833,8 +835,14 @@ Panel {
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.bodySmall
                     wrapMode: Text.Wrap
-                    // Rendered note bodies are data, not navigation.
-                    onLinkActivated: function(link) { Quickshell.execDetached(["xdg-open", link]) }
+                    // Rendered note bodies are data, not navigation: a link here
+                    // arrived over sync, so only an allowlisted scheme, or an
+                    // attachment inside this profile, is handed to the opener.
+                    onLinkActivated: function(link) {
+                      var url = Model.externalLinkUrl(link, root.profileDir)
+                      if (url === "") return
+                      Quickshell.execDetached(["xdg-open", url])
+                    }
                   }
 
                   Image {

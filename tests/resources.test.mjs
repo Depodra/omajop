@@ -173,3 +173,62 @@ test("markdown and HTML images in one body keep document order", () => {
   assert.equal(segments[1].title, "m")
   assert.equal(segments[3].title, "h")
 })
+
+// --- links out of a note ----------------------------------------------------
+
+const PROFILE = "/home/x/.config/joplin-desktop"
+const RESOURCES_DIR = PROFILE + "/resources"
+
+test("externalLinkUrl opens http and https, and nothing else", () => {
+  assert.equal(Model.externalLinkUrl("https://example.com/a?b=1#c", PROFILE),
+    "https://example.com/a?b=1#c")
+  assert.equal(Model.externalLinkUrl("http://example.com", PROFILE), "http://example.com")
+  // The scheme is matched case-insensitively, the URL is handed on untouched.
+  assert.equal(Model.externalLinkUrl("HTTPS://Example.com", PROFILE), "HTTPS://Example.com")
+})
+
+test("externalLinkUrl refuses schemes that dispatch to a handler", () => {
+  for (const url of [
+    "javascript:alert(1)",
+    "data:text/html;base64,PHNjcmlwdD4=",
+    "vbscript:msgbox",
+    "smb://host/share",
+    "ssh://host",
+    "joplin://x-callback-url/openNote?id=x"
+  ]) {
+    assert.equal(Model.externalLinkUrl(url, PROFILE), "", url + " must not be opened")
+  }
+})
+
+test("externalLinkUrl refuses a URL carrying credentials", () => {
+  // Reads as real.example, opens evil.example.
+  assert.equal(Model.externalLinkUrl("https://real.example@evil.example/", PROFILE), "")
+  assert.equal(Model.externalLinkUrl("https://user:pw@evil.example/", PROFILE), "")
+  assert.equal(Model.externalLinkUrl("https://", PROFILE), "")
+})
+
+test("externalLinkUrl refuses control characters and whitespace", () => {
+  const withNewline = "https://example.com/" + String.fromCharCode(10) + "evil"
+  assert.equal(Model.externalLinkUrl(withNewline, PROFILE), "")
+  const withNul = "https://example.com/" + String.fromCharCode(0)
+  assert.equal(Model.externalLinkUrl(withNul, PROFILE), "")
+  assert.equal(Model.externalLinkUrl("https://ex ample.com", PROFILE), "")
+})
+
+test("externalLinkUrl opens a file link only inside this profile's resources", () => {
+  const inside = "file://" + RESOURCES_DIR + "/a.png"
+  assert.equal(Model.externalLinkUrl(inside, PROFILE), inside)
+  assert.equal(Model.externalLinkUrl("file:///etc/passwd", PROFILE), "")
+  assert.equal(Model.externalLinkUrl("file://" + RESOURCES_DIR + "/../../.bashrc", PROFILE), "")
+  // A query or fragment is not part of the path the opener would resolve.
+  assert.equal(Model.externalLinkUrl("file://" + RESOURCES_DIR + "/a.png?x=1", PROFILE), "")
+  // With no profile there is nothing to bound a file link against.
+  assert.equal(Model.externalLinkUrl(inside, ""), "")
+})
+
+test("externalLinkUrl refuses a link with no scheme at all", () => {
+  assert.equal(Model.externalLinkUrl("relative/path.html", PROFILE), "")
+  assert.equal(Model.externalLinkUrl("#anchor", PROFILE), "")
+  assert.equal(Model.externalLinkUrl("", PROFILE), "")
+  assert.equal(Model.externalLinkUrl(null, PROFILE), "")
+})
