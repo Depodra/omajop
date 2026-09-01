@@ -9,7 +9,7 @@ import "Model.mjs" as Model
 // process, so this file stays presentational.
 Panel {
   id: root
-  moduleName: "org.renerocksai.omajop"
+  moduleName: "io.github.renerocksai.omajop"
   manageIpc: false
 
   property var anchorItem: null

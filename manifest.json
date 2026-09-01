@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "org.renerocksai.omajop",
+  "id": "io.github.renerocksai.omajop",
   "name": "Omajop",
   "version": "0.1.0",
   "author": "renerocksai",
