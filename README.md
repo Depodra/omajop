@@ -20,12 +20,6 @@ That clones into `~/.config/omarchy/plugins/io.github.renerocksai.omajop`,
 asks which bar section to put it in (center by default), and rescans the
 shell itself — no restart needed.
 
-It also needs `sqlite3`, which is how it reads the profile:
-
-```bash
-omarchy pkg add sqlite
-```
-
 Afterwards `omarchy plugin update io.github.renerocksai.omajop` and
 `omarchy plugin remove io.github.renerocksai.omajop` do what they say. To
 move it later:
