@@ -437,16 +437,80 @@ export function isImageResource(resource) {
   return !!resource && resource.mime.indexOf("image/") === 0
 }
 
+// An extension comes out of the database and is appended to a path, so it is
+// bounded to a short plain token. A separator, a traversal, a control character
+// or anything else yields no extension rather than a rewritten path.
+export const MAX_EXTENSION_CHARS = 16
+const SAFE_EXTENSION_RE = /^[A-Za-z0-9]{1,16}$/
+
+export function sanitizeExtension(value) {
+  const ext = String(value === undefined || value === null ? "" : value)
+    .replace(/^\.+/, "")
+  return SAFE_EXTENSION_RE.test(ext) ? ext : ""
+}
+
+// Resolves `.` and `..` textually, so containment can be decided without
+// touching the filesystem — the check has to hold for a path that does not
+// exist yet, and must not follow a link to decide it.
+export function normalizePath(path) {
+  const raw = String(path === undefined || path === null ? "" : path)
+  const absolute = raw.charAt(0) === "/"
+  const parts = raw.split("/")
+  const out = []
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]
+    if (part === "" || part === ".") continue
+    if (part === "..") {
+      if (out.length > 0 && out[out.length - 1] !== "..") out.pop()
+      else if (!absolute) out.push("..")
+      continue
+    }
+    out.push(part)
+  }
+  return (absolute ? "/" : "") + out.join("/")
+}
+
+// True only for a path strictly below `directory`. The directory itself is not
+// inside itself, and a sibling whose name merely starts the same way — a
+// `resources.evil` beside `resources` — is not either.
+export function isInsideDirectory(directory, path) {
+  const dir = normalizePath(directory)
+  const target = normalizePath(path)
+  if (dir === "" || dir === "/" || target === "") return false
+  return target.length > dir.length + 1
+    && target.slice(0, dir.length + 1) === dir + "/"
+}
+
+export function resourcesDirectory(profileDir) {
+  return stripTrailingSlash(profileDir) + "/" + RESOURCE_DIR
+}
+
+// Returns "" rather than a path whenever the result cannot be proven to sit
+// inside the profile's resources directory. Both the id and the extension are
+// database values, and what comes back is handed to an image decoder or to a
+// desktop opener, so neither is trusted to be shaped the way Joplin writes it.
 export function resourcePath(profileDir, id, extension) {
-  const ext = String(extension || "").replace(/^\./, "")
-  return stripTrailingSlash(profileDir) + "/" + RESOURCE_DIR + "/" + id
-    + (ext !== "" ? "." + ext : "")
+  const resourceId = String(id === undefined || id === null ? "" : id)
+  if (!ID_RE.test(resourceId)) return ""
+  const directory = resourcesDirectory(profileDir)
+  const raw = String(extension === undefined || extension === null ? "" : extension)
+    .replace(/^\.+/, "")
+  const ext = sanitizeExtension(raw)
+  // No extension at all is ordinary. One that is present but does not survive
+  // validation means the row cannot be trusted to describe a file on disk, so
+  // it gets no path rather than a path with the offending part quietly removed.
+  if (raw !== "" && ext === "") return ""
+  const path = directory + "/" + resourceId + (ext !== "" ? "." + ext : "")
+  return isInsideDirectory(directory, path) ? path : ""
 }
 
 // A path can contain characters that are not legal in a URL (a profile under a
-// directory with spaces, say), so the path component is encoded.
+// directory with spaces, say), so the path component is encoded. An empty path
+// yields an empty URL: "file://" on its own would resolve to the root.
 export function fileUrl(path) {
-  return "file://" + encodeURI(String(path || ""))
+  const value = String(path === undefined || path === null ? "" : path)
+  if (value === "") return ""
+  return "file://" + encodeURI(value)
 }
 
 // Splits a note body into an ordered list of segments:
@@ -484,17 +548,6 @@ export function splitBody(body, resources, profileDir) {
 
     const resource = map[id]
 
-    if (wantsEmbed && isImageResource(resource)) {
-      flush()
-      segments.push({
-        kind: "image",
-        url: fileUrl(resourcePath(profileDir, id, resource.extension)),
-        title: label !== "" ? label : resource.title,
-        missing: false
-      })
-      continue
-    }
-
     if (!resource) {
       // The reference outlived its resource row; say so rather than leaving
       // a dangling `:/id` in the text.
@@ -502,10 +555,29 @@ export function splitBody(body, resources, profileDir) {
       continue
     }
 
+    // A rendered image and an opened attachment both need a path that is
+    // provably inside the profile. Without one there is nothing safe to point
+    // at, so the reference degrades to a label the same way a dangling one does.
+    const path = resourcePath(profileDir, id, resource.extension)
+    if (path === "") {
+      buffer += label !== "" ? label + " (unavailable attachment)" : "(unavailable attachment)"
+      continue
+    }
+
+    if (wantsEmbed && isImageResource(resource)) {
+      flush()
+      segments.push({
+        kind: "image",
+        url: fileUrl(path),
+        title: label !== "" ? label : resource.title,
+        missing: false
+      })
+      continue
+    }
+
     // A non-image attachment, or an image reference written as a plain link.
-    const url = fileUrl(resourcePath(profileDir, id, resource.extension))
     const text = label !== "" ? label : (resource.title !== "" ? resource.title : "attachment")
-    buffer += "[" + text + "](" + url + ")"
+    buffer += "[" + text + "](" + fileUrl(path) + ")"
   }
 
   buffer += source.slice(lastIndex)

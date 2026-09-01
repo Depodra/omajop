@@ -25,9 +25,65 @@ test("resourcePath follows Joplin's <profile>/resources/<id>.<ext> layout", () =
   assert.equal(Model.resourcePath(DIR, IMG, ""), DIR + "/resources/" + IMG)
 })
 
+test("sanitizeExtension keeps a plain extension and drops everything else", () => {
+  assert.equal(Model.sanitizeExtension("png"), "png")
+  assert.equal(Model.sanitizeExtension(".png"), "png")
+  assert.equal(Model.sanitizeExtension("PNG"), "PNG")
+  // A separator, a traversal, a control character or an over-long token is not
+  // an extension, and must not reach a path.
+  assert.equal(Model.sanitizeExtension("png/../../etc/passwd"), "")
+  assert.equal(Model.sanitizeExtension("../../etc/passwd"), "")
+  assert.equal(Model.sanitizeExtension("p g"), "")
+  assert.equal(Model.sanitizeExtension("p\u0000g"), "")
+  assert.equal(Model.sanitizeExtension("x".repeat(17)), "")
+  assert.equal(Model.sanitizeExtension(null), "")
+})
+
+test("normalizePath resolves . and .. without touching the filesystem", () => {
+  assert.equal(Model.normalizePath("/a/b/../c"), "/a/c")
+  assert.equal(Model.normalizePath("/a/./b/"), "/a/b")
+  assert.equal(Model.normalizePath("/a/b/../../../.."), "/")
+  assert.equal(Model.normalizePath("a/../b"), "b")
+})
+
+test("isInsideDirectory rejects the directory itself and a same-prefix sibling", () => {
+  assert.ok(Model.isInsideDirectory("/a/res", "/a/res/f.png"))
+  assert.ok(!Model.isInsideDirectory("/a/res", "/a/res"))
+  // The classic prefix bug: /a/resources.evil starts with /a/resources.
+  assert.ok(!Model.isInsideDirectory("/a/res", "/a/res.evil/f.png"))
+  assert.ok(!Model.isInsideDirectory("/a/res", "/a/res/../../etc/passwd"))
+  assert.ok(!Model.isInsideDirectory("/", "/etc/passwd"))
+})
+
+test("resourcePath refuses to leave the profile's resources directory", () => {
+  // A crafted file_extension is the escape route: it is appended to the path.
+  assert.equal(Model.resourcePath(DIR, IMG, "png/../../../../etc/passwd"), "")
+  assert.equal(Model.resourcePath(DIR, IMG, "../../../.bashrc"), "")
+  // A malformed id never reaches the filesystem either.
+  assert.equal(Model.resourcePath(DIR, "../../etc/passwd", "png"), "")
+  assert.equal(Model.resourcePath(DIR, "", "png"), "")
+  // Everything returned is inside the resources directory, by construction.
+  assert.ok(Model.isInsideDirectory(
+    Model.resourcesDirectory(DIR), Model.resourcePath(DIR, IMG, "png")))
+})
+
+test("an attachment with no usable path degrades to a label", () => {
+  const resources = Model.buildResourceMap([
+    { id: IMG, mime: "image/png", file_extension: "png/../../../etc/passwd",
+      title: "Bad.png", encryption_applied: 0 }
+  ])
+  const segments = Model.splitBody("![alt](:/" + IMG + ")", resources, DIR)
+  assert.equal(segments.length, 1)
+  assert.equal(segments[0].kind, "text")
+  assert.ok(segments[0].text.includes("unavailable attachment"))
+  assert.ok(!segments[0].text.includes("passwd"))
+})
+
 test("fileUrl encodes characters that are illegal in a URL", () => {
   assert.equal(Model.fileUrl("/home/a b/c.png"), "file:///home/a%20b/c.png")
   assert.ok(!Model.fileUrl("/a/b/c.png").includes("%2F"))
+  // An empty path must not become "file://", which resolves to the root.
+  assert.equal(Model.fileUrl(""), "")
 })
 
 test("an image reference becomes its own segment, splitting the text", () => {
