@@ -46,6 +46,7 @@ BarWidget {
   property date now: new Date()
 
   // Body of the currently previewed note, fetched on demand.
+  property bool bodyReadPending: false
   property string bodyNoteId: ""
   property string bodyText: ""
   property int bodyMarkup: Model.MARKUP_MARKDOWN
@@ -157,6 +158,8 @@ BarWidget {
       loadError = ""
       tagIndex = Model.buildTagIndex(tagRows, notes)
       setData(folders, notes)
+      // The selection can survive a sync, but its cached body cannot.
+      if (bodyNoteId !== "") loadBody(bodyNoteId, true)
     } catch (error) {
       failLoad(String(error), "The database returned unusable output.")
     }
@@ -185,14 +188,26 @@ BarWidget {
 
   // --- note body ------------------------------------------------------------
 
-  function loadBody(id) {
+  function loadBody(id, force) {
     var noteId = String(id || "")
-    if (noteId === bodyNoteId) return
+    if (noteId === bodyNoteId && !force) return
+    // Keep the preview visible during a refresh of the same note.
+    if (noteId !== bodyNoteId) {
+      bodyText = ""
+      bodyEncrypted = false
+      bodyTruncated = false
+    }
     bodyNoteId = noteId
-    bodyText = ""
     bodyError = ""
-    bodyEncrypted = false
-    bodyTruncated = false
+    bodyReadPending = true
+    // Serialize reads: a refresh or selection change during a query must not
+    // let its old result overwrite the latest selection.
+    if (!bodyProcess.running) startBodyRead()
+  }
+
+  function startBodyRead() {
+    bodyReadPending = false
+    var noteId = bodyNoteId
     if (noteId === "" || !ready) return
 
     var sql
@@ -207,6 +222,10 @@ BarWidget {
   }
 
   function finishBody(exitCode) {
+    if (bodyReadPending) {
+      startBodyRead()
+      return
+    }
     if (exitCode !== 0) {
       bodyError = Model.truncate(Model.plainLine(String(bodyStderr.text || "").trim()), 200)
         || "Could not read this note."

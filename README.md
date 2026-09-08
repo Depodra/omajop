@@ -47,6 +47,9 @@ To hack on it instead of just running it, see [Development](#development).
 
 Double-clicking a note opens it in Joplin too.
 
+Manual and automatic refreshes also reload the selected note's preview, so
+changes synced by Joplin appear without switching to another note first.
+
 The left column lists **folders and then tags**. Selecting either scopes the
 note list; `↑`/`↓` walk the whole column, stepping over the `TAGS` caption. A
 note's own tags appear beside its timestamp in the preview.
