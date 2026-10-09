@@ -4,16 +4,17 @@ import qs.Commons
 import qs.Ui
 import "Model.mjs" as Model
 
-// Profile settings, shown in place of the notes. Lists the profiles the panel
-// browses, with what each syncs to, and the Joplin profiles found on this
-// machine that are not listed yet. Every change is saved as it is made. The
-// host owns the discovery process and the shell.json write, as it owns every
-// other process, so this file stays presentational.
+// Profile settings, shown in place of the notes. The list view shows the
+// profiles the panel browses, with what each syncs to, and the Joplin profiles
+// found on this machine that are not listed yet; choosing a profile opens its
+// own page. Every change is saved as it is made. The host owns the processes
+// and the shell.json write, as it owns every other, so this file stays
+// presentational.
 Item {
   id: root
 
   property var hostWidget: null
-  // Where the keyboard goes back to when an inline field is done.
+  // Where the keyboard goes back to when a field is done.
   property var keyTarget: null
   property color contentForeground: Color.foreground
   property color mutedForeground: Qt.darker(contentForeground, 1.5)
@@ -35,30 +36,61 @@ Item {
     return out
   }
 
+  // "list", or "edit" for the profile at editIndex.
+  property string mode: "list"
+  property int editIndex: -1
+  readonly property var editing: mode === "edit" && editIndex >= 0 && editIndex < profiles.length
+    ? profiles[editIndex] : null
+
   // One keyboard cursor over both lists: the listed profiles, then the found.
   property int cursor: 0
   readonly property int rowCount: profiles.length + available.length
-  property int renaming: -1
-  readonly property bool editing: renaming >= 0 || pathField.activeFocus || commandField.activeFocus
+  readonly property bool typing: pathField.activeFocus || commandField.activeFocus
+    || nameField.activeFocus
 
   function clampCursor() {
     cursor = Math.max(0, Math.min(rowCount - 1, cursor))
   }
 
   function moveCursor(delta) {
-    if (rowCount === 0) return
+    if (mode !== "list" || rowCount === 0) return
     cursor = Math.max(0, Math.min(rowCount - 1, cursor + delta))
-    rowsColumn.reveal(cursor)
+    listColumn.reveal(cursor)
   }
 
   function save(list) {
     if (hostWidget) hostWidget.saveProfiles(list)
   }
 
-  // Enter: rename a listed profile, or add a found one.
+  // Enter: open a listed profile's page, or add a found one.
   function activate() {
-    if (cursor < profiles.length) startRename(cursor)
+    if (mode !== "list") return
+    if (cursor < profiles.length) openEdit(cursor)
     else addFound(cursor - profiles.length)
+  }
+
+  // Escape: back to the list. False when already there, so the panel can
+  // leave the settings instead.
+  function back() {
+    if (mode === "list") return false
+    showList()
+    return true
+  }
+
+  function showList() {
+    if (mode === "edit" && editIndex >= 0) cursor = editIndex
+    mode = "list"
+    editIndex = -1
+    returnFocus()
+  }
+
+  function openEdit(index) {
+    if (index < 0 || index >= profiles.length) return
+    cursor = index
+    editIndex = index
+    mode = "edit"
+    nameField.text = profiles[index].name
+    returnFocus()
   }
 
   function removeAt(index) {
@@ -67,7 +99,7 @@ Item {
   }
 
   function removeAtCursor() {
-    if (cursor < profiles.length) removeAt(cursor)
+    if (mode === "list" && cursor < profiles.length) removeAt(cursor)
   }
 
   function move(index, delta) {
@@ -79,7 +111,7 @@ Item {
 
   // J / K carry the profile under the cursor down / up.
   function moveAtCursor(delta) {
-    if (cursor < profiles.length) move(cursor, delta)
+    if (mode === "list" && cursor < profiles.length) move(cursor, delta)
   }
 
   function addFound(index) {
@@ -97,57 +129,89 @@ Item {
     returnFocus()
   }
 
-  function startRename(index) {
-    if (index < 0 || index >= profiles.length) return
-    cursor = index
-    renaming = index
-  }
-
-  function commitRename(text) {
-    if (renaming >= 0) save(Model.renameProfile(profiles, renaming, text))
-    renaming = -1
-    returnFocus()
-  }
-
-  function cancelRename() {
-    renaming = -1
-    returnFocus()
+  function rename(text) {
+    if (!editing) return
+    if (Model.plainLine(text) !== editing.name) save(Model.renameProfile(profiles, editIndex, text))
   }
 
   function returnFocus() {
     if (keyTarget) keyTarget.forceActiveFocus()
   }
 
-  // What a profile is and what it syncs to, on the line under its name.
-  function describe(dir) {
-    var kind = Model.profileKind(home, dir)
-    var parts = [Model.profileKindLabel(kind, home, dir)]
-    var info = discovery.info ? discovery.info[dir] : null
-    if (info && !info.hasDatabase) parts.push("no Joplin database here yet")
-    else if (info) parts.push(Model.accountLine(info.account))
-    else if (hostWidget && hostWidget.discovering) parts.push("…")
-    return parts.join("  ·  ")
+  function infoFor(dir) {
+    return discovery.info ? discovery.info[dir] || null : null
   }
 
-  function missingDatabase(dir) {
-    var info = discovery.info ? discovery.info[dir] : null
+  // What a profile syncs to, or why its notes cannot be read.
+  function accountText(dir) {
+    var info = infoFor(dir)
+    if (!info) return hostWidget && hostWidget.discovering ? "…" : ""
+    if (!info.hasDatabase) return "No Joplin database here yet"
+    return Model.accountLine(info.account)
+  }
+
+  function problem(dir) {
+    var info = infoFor(dir)
     return !!info && !info.hasDatabase
   }
 
-  onRowCountChanged: Qt.callLater(root.clampCursor)
+  // The listed profile's page follows it if the list is edited elsewhere.
+  onProfilesChanged: {
+    Qt.callLater(root.clampCursor)
+    if (mode === "edit" && !editing) showList()
+  }
+
+  component Caption: Text {
+    width: parent ? parent.width : 0
+    textFormat: Text.PlainText
+    color: root.mutedForeground
+    font.family: root.contentFontFamily
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.WordWrap
+  }
+
+  component Header: PanelSectionHeader {
+    foreground: root.contentForeground
+    fontFamily: root.contentFontFamily
+  }
+
+  component Spacer: Item {
+    width: 1
+    height: Style.space(4)
+  }
+
+  component SmallField: TextField {
+    width: Style.space(320)
+    foreground: root.contentForeground
+    font.family: root.contentFontFamily
+    font.pixelSize: Style.font.caption
+    horizontalPadding: Style.space(6)
+    verticalPadding: Style.space(3)
+  }
+
+  component SmallButton: Button {
+    foreground: root.contentForeground
+    fontFamily: root.contentFontFamily
+    fontSize: Style.font.caption
+    bordered: true
+    opacity: enabled ? 1.0 : 0.5
+  }
+
+  // --- list -------------------------------------------------------------------
 
   Flickable {
-    id: scroller
+    id: listScroller
     anchors.fill: parent
+    visible: root.mode === "list"
     contentWidth: width
-    contentHeight: rowsColumn.implicitHeight
+    contentHeight: listColumn.implicitHeight
     clip: true
     boundsBehavior: Flickable.StopAtBounds
     interactive: contentHeight > height
 
     Column {
-      id: rowsColumn
-      width: scroller.width
+      id: listColumn
+      width: listScroller.width
       spacing: Style.space(6)
 
       // Keep the keyboard cursor on screen.
@@ -156,30 +220,21 @@ Item {
           ? profileRepeater.itemAt(index)
           : foundRepeater.itemAt(index - root.profiles.length)
         if (!row) return
-        var y = row.mapToItem(rowsColumn, 0, 0).y
-        if (y < scroller.contentY) scroller.contentY = y
-        else if (y + row.height > scroller.contentY + scroller.height)
-          scroller.contentY = y + row.height - scroller.height
+        var y = row.mapToItem(listColumn, 0, 0).y
+        if (y < listScroller.contentY) listScroller.contentY = y
+        else if (y + row.height > listScroller.contentY + listScroller.height)
+          listScroller.contentY = y + row.height - listScroller.height
       }
 
-      Text {
-        width: parent.width
+      Caption {
         visible: !root.canSave
         text: "This bar cannot save omajop's settings, so changes here last until "
           + "the shell restarts. Edit the widget's entry in ~/.config/omarchy/shell.json "
           + "to keep them."
-        textFormat: Text.PlainText
         color: Color.urgent
-        font.family: root.contentFontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
       }
 
-      PanelSectionHeader {
-        text: "PROFILES"
-        foreground: root.contentForeground
-        fontFamily: root.contentFontFamily
-      }
+      Header { text: "PROFILES" }
 
       Repeater {
         id: profileRepeater
@@ -190,20 +245,16 @@ Item {
           required property var modelData
           required property int index
 
-          readonly property bool isRenaming: root.renaming === profileRow.index
-          readonly property bool isBrowsed: root.hostWidget
-            && root.hostWidget.profileIndex === profileRow.index
-
-          width: rowsColumn.width
+          width: listColumn.width
           height: Style.space(44)
-          hasCursor: root.cursor === profileRow.index && !root.editing
+          hasCursor: root.cursor === profileRow.index && !root.typing
           foreground: root.contentForeground
 
           MouseArea {
             anchors.fill: parent
             hoverEnabled: true
-            onEntered: if (!root.editing) root.cursor = profileRow.index
-            onDoubleClicked: root.startRename(profileRow.index)
+            onEntered: if (!root.typing) root.cursor = profileRow.index
+            onClicked: root.openEdit(profileRow.index)
           }
 
           Text {
@@ -211,8 +262,8 @@ Item {
             anchors.left: parent.left
             anchors.leftMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
-            text: profileRow.isBrowsed ? "" : ""
-            color: profileRow.isBrowsed ? Color.accent : root.mutedForeground
+            text: ""
+            color: root.mutedForeground
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.bodySmall
           }
@@ -224,7 +275,6 @@ Item {
             anchors.top: parent.top
             anchors.topMargin: Style.space(5)
             width: Math.min(implicitWidth, Style.space(200))
-            visible: !profileRow.isRenaming
             text: profileRow.modelData.name
             textFormat: Text.PlainText
             elide: Text.ElideRight
@@ -234,36 +284,12 @@ Item {
             font.bold: true
           }
 
-          TextField {
-            id: renameField
-            anchors.left: profileGlyph.right
-            anchors.leftMargin: Style.space(8)
-            anchors.verticalCenter: profileName.verticalCenter
-            width: Style.space(200)
-            visible: profileRow.isRenaming
-            foreground: root.contentForeground
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.caption
-            horizontalPadding: Style.space(6)
-            verticalPadding: Style.space(2)
-            placeholderText: "Profile name"
-            onVisibleChanged: if (visible) {
-              text = profileRow.modelData.name
-              selectAll()
-              forceActiveFocus()
-            }
-            onAccepted: root.commitRename(text)
-            Keys.onEscapePressed: root.cancelRename()
-            onActiveFocusChanged: if (!activeFocus && profileRow.isRenaming) root.cancelRename()
-          }
-
           Text {
             anchors.left: profileName.right
             anchors.leftMargin: Style.space(10)
             anchors.right: profileActions.left
             anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: profileName.verticalCenter
-            visible: !profileRow.isRenaming
             text: Model.contractHome(profileRow.modelData.dir, root.home)
             textFormat: Text.PlainText
             elide: Text.ElideMiddle
@@ -278,10 +304,10 @@ Item {
             anchors.rightMargin: Style.space(8)
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Style.space(5)
-            text: root.describe(profileRow.modelData.dir)
+            text: root.accountText(profileRow.modelData.dir)
             textFormat: Text.PlainText
             elide: Text.ElideRight
-            color: root.missingDatabase(profileRow.modelData.dir) ? Color.urgent : root.mutedForeground
+            color: root.problem(profileRow.modelData.dir) ? Color.urgent : root.mutedForeground
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
           }
@@ -315,10 +341,10 @@ Item {
 
             PanelActionButton {
               iconText: ""
-              tooltipText: "Rename  ·  Enter"
+              tooltipText: "Edit  ·  Enter"
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
-              onClicked: root.startRename(profileRow.index)
+              onClicked: root.openEdit(profileRow.index)
             }
 
             PanelActionButton {
@@ -336,17 +362,12 @@ Item {
         }
       }
 
-      Item {
-        width: parent.width
-        height: Style.space(4)
-      }
+      Spacer {}
 
-      PanelSectionHeader {
+      Header {
         visible: root.available.length > 0 || (root.hostWidget && root.hostWidget.discovering)
         text: root.hostWidget && root.hostWidget.discovering && root.available.length === 0
           ? "LOOKING FOR JOPLIN PROFILES…" : "FOUND ON THIS COMPUTER"
-        foreground: root.contentForeground
-        fontFamily: root.contentFontFamily
       }
 
       Repeater {
@@ -360,16 +381,16 @@ Item {
 
           readonly property int row: root.profiles.length + foundRow.index
 
-          width: rowsColumn.width
+          width: listColumn.width
           height: Style.space(44)
-          hasCursor: root.cursor === foundRow.row && !root.editing
+          hasCursor: root.cursor === foundRow.row && !root.typing
           foreground: root.contentForeground
 
           MouseArea {
             anchors.fill: parent
             hoverEnabled: true
-            onEntered: if (!root.editing) root.cursor = foundRow.row
-            onDoubleClicked: root.addFound(foundRow.index)
+            onEntered: if (!root.typing) root.cursor = foundRow.row
+            onClicked: root.addFound(foundRow.index)
           }
 
           Text {
@@ -418,7 +439,8 @@ Item {
             anchors.rightMargin: Style.space(8)
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Style.space(5)
-            text: root.describe(foundRow.modelData.dir)
+            text: Model.profileKindLabel(foundRow.modelData.kind, root.home, foundRow.modelData.dir)
+              + "  ·  " + Model.accountLine(foundRow.modelData.account)
             textFormat: Text.PlainText
             elide: Text.ElideRight
             color: root.mutedForeground
@@ -442,39 +464,20 @@ Item {
         }
       }
 
-      Item {
-        width: parent.width
-        height: Style.space(4)
-      }
+      Spacer {}
 
-      PanelSectionHeader {
-        text: "ADD A PROFILE DIRECTORY"
-        foreground: root.contentForeground
-        fontFamily: root.contentFontFamily
-      }
+      Header { text: "ADD A PROFILE DIRECTORY" }
 
-      Text {
-        width: parent.width
+      Caption {
         text: "For a Joplin started with --profile. Secondary instances and "
           + "in-app profiles appear above once Joplin has created them."
-        textFormat: Text.PlainText
-        color: root.mutedForeground
-        font.family: root.contentFontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
       }
 
       Row {
         spacing: Style.space(8)
 
-        TextField {
+        SmallField {
           id: pathField
-          width: Style.space(320)
-          foreground: root.contentForeground
-          font.family: root.contentFontFamily
-          font.pixelSize: Style.font.caption
-          horizontalPadding: Style.space(6)
-          verticalPadding: Style.space(3)
           placeholderText: "~/path/to/profile"
           onAccepted: root.addPath(text)
           Keys.onEscapePressed: {
@@ -483,50 +486,26 @@ Item {
           }
         }
 
-        Button {
+        SmallButton {
           text: "Add"
-          foreground: root.contentForeground
-          fontFamily: root.contentFontFamily
-          fontSize: Style.font.caption
-          bordered: true
           enabled: pathField.text.trim() !== "" && root.profiles.length < Model.MAX_PROFILES
-          opacity: enabled ? 1.0 : 0.5
           onClicked: root.addPath(pathField.text)
         }
       }
 
-      Item {
-        width: parent.width
-        height: Style.space(4)
-      }
+      Spacer {}
 
-      PanelSectionHeader {
-        text: "OPENING NOTES"
-        foreground: root.contentForeground
-        fontFamily: root.contentFontFamily
-      }
+      Header { text: "OPENING NOTES" }
 
-      Text {
-        width: parent.width
+      Caption {
         text: "Notes from the main instance open through the joplin:// link. Any "
           + "other profile is opened by starting Joplin with that profile's flags, "
           + "using this command. Change it if Joplin is installed under another "
           + "name, such as an AppImage."
-        textFormat: Text.PlainText
-        color: root.mutedForeground
-        font.family: root.contentFontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
       }
 
-      TextField {
+      SmallField {
         id: commandField
-        width: Style.space(320)
-        foreground: root.contentForeground
-        font.family: root.contentFontFamily
-        font.pixelSize: Style.font.caption
-        horizontalPadding: Style.space(6)
-        verticalPadding: Style.space(3)
         placeholderText: Model.DEFAULT_JOPLIN_COMMAND
         text: root.hostWidget ? root.hostWidget.joplinCommand : ""
         onAccepted: {
@@ -538,6 +517,126 @@ Item {
           text = root.hostWidget ? root.hostWidget.joplinCommand : ""
           root.returnFocus()
         }
+      }
+    }
+  }
+
+  // --- one profile ------------------------------------------------------------
+
+  Flickable {
+    id: editScroller
+    anchors.fill: parent
+    visible: root.mode === "edit"
+    contentWidth: width
+    contentHeight: editColumn.implicitHeight
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
+    interactive: contentHeight > height
+
+    Column {
+      id: editColumn
+      width: editScroller.width
+      spacing: Style.space(6)
+
+      readonly property string dir: root.editing ? root.editing.dir : ""
+      readonly property var info: root.infoFor(dir)
+      readonly property string kind: Model.profileKind(root.home, dir)
+      readonly property string launchReason: Model.openTarget(root.home, dir,
+        root.hostWidget ? root.hostWidget.joplinCommand : "").reason
+
+      Row {
+        spacing: Style.space(8)
+
+        PanelActionButton {
+          iconText: ""
+          tooltipText: "Back  ·  Esc"
+          foreground: root.contentForeground
+          fontFamily: root.contentFontFamily
+          onClicked: root.showList()
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.editing ? root.editing.name : ""
+          textFormat: Text.PlainText
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.subtitle
+          font.bold: true
+        }
+      }
+
+      Spacer {}
+
+      Header { text: "NAME" }
+
+      SmallField {
+        id: nameField
+        placeholderText: "Shown in the panel header"
+        onAccepted: {
+          root.rename(text)
+          root.returnFocus()
+        }
+        onActiveFocusChanged: if (!activeFocus) root.rename(text)
+        Keys.onEscapePressed: {
+          text = root.editing ? root.editing.name : ""
+          root.returnFocus()
+        }
+      }
+
+      Spacer {}
+
+      Header { text: "SYNCS TO" }
+
+      Text {
+        width: parent.width
+        text: {
+          var info = editColumn.info
+          if (!info) return root.hostWidget && root.hostWidget.discovering ? "…" : ""
+          if (!info.hasDatabase) return "No Joplin database here yet"
+          if (info.account.target === 0) return "Not syncing"
+          return info.account.label
+        }
+        textFormat: Text.PlainText
+        color: root.problem(editColumn.dir) ? Color.urgent : root.contentForeground
+        font.family: root.contentFontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      Caption {
+        visible: text !== ""
+        text: {
+          var info = editColumn.info
+          if (!info || !info.hasDatabase) return ""
+          var lines = []
+          if (info.account.location) lines.push("Server: " + info.account.location)
+          if (info.account.user) lines.push("Signed in as: " + info.account.user)
+          return lines.join("\n")
+        }
+      }
+
+      Spacer {}
+
+      Caption {
+        text: editColumn.launchReason !== ""
+          ? editColumn.launchReason
+          : "The server, email and password belong to Joplin. To change them, open "
+            + "this profile in Joplin and go to Tools → Options → Synchronisation."
+      }
+
+      SmallButton {
+        text: "Open in Joplin"
+        enabled: editColumn.launchReason === ""
+        onClicked: if (root.hostWidget) root.hostWidget.launchJoplin(editColumn.dir)
+      }
+
+      Spacer {}
+
+      Header { text: "LOCATION" }
+
+      Caption {
+        text: Model.profileKindLabel(editColumn.kind, root.home, editColumn.dir)
+          + "\n" + Model.contractHome(editColumn.dir, root.home)
       }
     }
   }

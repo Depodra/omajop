@@ -273,6 +273,16 @@ export function openTarget(home, profileDir, joplinCommand) {
 }
 
 
+// Starts the profile's Joplin, or brings it forward if it is running: the same
+// routing as opening a note, without one. The default instance is started by
+// name rather than through xdg-open, which needs a URL to hand over.
+export function launchArgv(home, profileDir, joplinCommand) {
+  const target = openTarget(home, profileDir, joplinCommand)
+  if (target.argv.length === 0) return []
+  if (target.argv[0] === "xdg-open") return [joplinExecutable(joplinCommand)]
+  return target.argv.slice()
+}
+
 export function openArgv(home, profileDir, noteId, joplinCommand) {
   const url = noteUrl(noteId)
   const target = openTarget(home, profileDir, joplinCommand)

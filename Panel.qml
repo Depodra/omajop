@@ -202,13 +202,14 @@ Panel {
   }
 
   function openSettings() {
+    profileSettings.showList()
     settingsOpen = true
     profileSettings.cursor = hostWidget ? hostWidget.profileIndex : 0
     if (hostWidget) hostWidget.discoverProfiles()
   }
 
   function closeSettings() {
-    profileSettings.renaming = -1
+    profileSettings.showList()
     settingsOpen = false
     keyCatcher.forceActiveFocus()
   }
@@ -305,10 +306,14 @@ Panel {
         if (root.settingsOpen) profileSettings.activate()
         else root.openSelected()
       }
-      // Escape leaves the settings before it closes the panel.
+      // Escape steps back out of a profile's page, then the settings, before
+      // it closes the panel.
       onCloseRequested: {
-        if (root.settingsOpen) root.closeSettings()
-        else root.close()
+        if (root.settingsOpen) {
+          if (!profileSettings.back()) root.closeSettings()
+        } else {
+          root.close()
+        }
       }
       onDeleteRequested: if (root.settingsOpen) profileSettings.removeAtCursor()
       onTabRequested: function(direction) { root.switchPanel(direction) }
@@ -344,7 +349,9 @@ Panel {
           id: headingLabel
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
-          visible: !root.multipleProfiles
+          // The settings edit profiles; switching the browsed one there would
+          // read as picking which to edit.
+          visible: !root.multipleProfiles || root.settingsOpen
           text: "JOPLIN"
           color: root.mutedForeground
           font.family: root.contentFontFamily
@@ -360,7 +367,7 @@ Panel {
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(10)
-          visible: root.multipleProfiles
+          visible: root.multipleProfiles && !root.settingsOpen
 
           Repeater {
             model: root.profiles
@@ -407,7 +414,7 @@ Panel {
 
         Text {
           id: countLabel
-          anchors.left: root.multipleProfiles ? profileTabs.right : headingLabel.right
+          anchors.left: profileTabs.visible ? profileTabs.right : headingLabel.right
           anchors.leftMargin: Style.space(8)
           anchors.verticalCenter: parent.verticalCenter
           text: {

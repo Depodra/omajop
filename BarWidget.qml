@@ -403,6 +403,12 @@ BarWidget {
     saveSettings({ profiles: Model.profileEntries(list, Quickshell.env("HOME")) })
   }
 
+  // Starts or focuses a profile's Joplin, where its server and sign-in live.
+  function launchJoplin(dir) {
+    var argv = Model.launchArgv(Quickshell.env("HOME"), dir, joplinCommand)
+    if (argv.length > 0) Quickshell.execDetached(argv)
+  }
+
   function saveJoplinCommand(text) {
     var next = Model.normalizeJoplinCommand(text)
     if (next !== joplinCommand) saveSettings({ joplinCommand: next })

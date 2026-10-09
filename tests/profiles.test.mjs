@@ -106,3 +106,11 @@ test("joplinExecutable falls back to joplin-desktop", () => {
   assert.equal(Model.joplinExecutable(null), "joplin-desktop")
   assert.equal(Model.joplinExecutable(" /opt/joplin "), "/opt/joplin")
 })
+
+test("launchArgv starts or focuses a profile's Joplin without a note", () => {
+  assert.deepEqual(Model.launchArgv(HOME, ROOT, ""), ["joplin-desktop"])
+  assert.deepEqual(Model.launchArgv(HOME, ROOT + "-alt1", "/opt/joplin"),
+    ["/opt/joplin", "--alt-instance-id", "alt1"])
+  assert.deepEqual(Model.launchArgv(HOME, "/srv/notes", ""), ["joplin-desktop", "--profile", "/srv/notes"])
+  assert.deepEqual(Model.launchArgv(HOME, ROOT + "/profile-a1", ""), [])
+})
