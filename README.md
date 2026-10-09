@@ -114,7 +114,7 @@ Changes are saved as they are made, to the widget's entry in
 `~/.config/omarchy/shell.json`, through the write the shell grants a plugin for
 its own entry. Finding profiles reads each one's `settings.json`, which also
 holds the Web Clipper's API token; only the sync target, its server or path,
-and the username are kept from it.
+and the username are taken from it and shown.
 
 The list is stored as `profiles`, which can also be written by hand. Each entry
 is a `name` and a `path`; a missing `path` means the default profile, and a bare

@@ -167,3 +167,43 @@ test("a profile with no database does not leave its error on the next one", () =
   assert.equal(state.dbState, "checking")
   assert.equal(state.loadError, "")
 })
+
+// The settings view saves through the widget's own save functions.
+function settingsWidget(profiles, browsed) {
+  const saved = []
+  const state = vm.createContext({
+    Model, Quickshell: { env: () => "/home/x" },
+    profileDir: browsed, activeProfileDir: "", canSaveSettings: true,
+    root: { moduleName: "io.github.renerocksai.omajop", settings: { id: "x", sortBy: "title" } },
+    bar: { shell: { updateEntryInline(id, entry) { saved.push(entry) } } },
+  })
+  for (const name of ["saveSettings", "saveProfiles"]) {
+    const source = qml.match(new RegExp(`  function ${name}\\([^]*?\\n  }`))
+    assert.ok(source, `widget handler ${name} exists`)
+    vm.runInContext(source[0], state)
+  }
+  return { state, saved }
+}
+
+test("editing the list pins the profile on screen", () => {
+  // Nothing picked yet: the first profile is browsed only because it is first.
+  const work = { name: "Work", dir: "/home/x/.config/joplin-desktop" }
+  const home = { name: "Home", dir: "/home/x/.config/joplin-desktop-alt1" }
+  const { state, saved } = settingsWidget([work, home], work.dir)
+  state.saveProfiles([home, work])
+  assert.equal(state.activeProfileDir, work.dir)
+  assert.equal(saved.length, 1)
+})
+
+test("saving keeps every other setting and writes a real array", () => {
+  const { state, saved } = settingsWidget([], "/home/x/.config/joplin-desktop")
+  state.saveProfiles([{ name: "Work", dir: "/home/x/.config/joplin-desktop" },
+    { name: "Home", dir: "/home/x/.config/joplin-desktop-alt1" }])
+  const entry = JSON.parse(JSON.stringify(saved[0]))
+  assert.deepEqual(entry, {
+    id: "io.github.renerocksai.omajop",
+    sortBy: "title",
+    profiles: [{ name: "Work" }, { name: "Home", path: "~/.config/joplin-desktop-alt1" }]
+  })
+  assert.equal(state.root.settings, saved[0])
+})

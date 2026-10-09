@@ -397,6 +397,9 @@ BarWidget {
   }
 
   function saveProfiles(list) {
+    // Until a profile is picked the first one is browsed implicitly, and
+    // moving or removing it would switch to another. Pin the one on screen.
+    activeProfileDir = profileDir
     saveSettings({ profiles: Model.profileEntries(list, Quickshell.env("HOME")) })
   }
 
@@ -424,7 +427,7 @@ BarWidget {
 
   function finishDiscovery(exitCode) {
     // The raw output carries every settings.json it read, API token and all;
-    // only the parsed summary is kept.
+    // only the parsed summary is used.
     try {
       discovery = Model.parseDiscovery(exitCode === 0 ? discoverStdout.text || "" : "",
         Quickshell.env("HOME"))
