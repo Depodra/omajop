@@ -129,8 +129,10 @@ email you sign in with, and creates the second Joplin those need: the secondary
 instance in `~/.config/joplin-desktop-alt1`, with its `settings.json` already
 pointing at the server. It adds the profile to the list and starts Joplin on it
 with `--no-welcome`, so the welcome notebook is not uploaded into the account on
-the first sync. Joplin asks for the password; once it has synced, the notes show
-up here.
+the first sync; so does every start from the profile's page until Joplin has
+created its database. Then enter the password in that Joplin, under **Tools →
+Options → Synchronisation**, and press **Apply**. Once it has synced, the notes
+show up here.
 
 It is always `alt1`. Joplin's own **File → Open secondary app instance** opens
 `alt1`, and when a secondary instance restarts itself, the main instance

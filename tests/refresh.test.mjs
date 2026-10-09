@@ -207,3 +207,41 @@ test("saving keeps every other setting and writes a real array", () => {
   })
   assert.equal(state.root.settings, saved[0])
 })
+
+test("Joplin started from a profile's page skips the welcome notebook until it has a database", () => {
+  const launched = []
+  const state = vm.createContext({
+    Model, joplinCommand: "",
+    Quickshell: { env: () => "/home/x", execDetached(argv) { launched.push(argv) } },
+    discovery: { info: {
+      "/home/x/.config/joplin-desktop-alt1": { hasDatabase: false },
+      "/home/x/.config/joplin-desktop": { hasDatabase: true }
+    } },
+  })
+  vm.runInContext(qml.match(/  function launchJoplin\([^]*?\n  }/)[0], state)
+  state.launchJoplin("/home/x/.config/joplin-desktop-alt1")
+  state.launchJoplin("/home/x/.config/joplin-desktop")
+  assert.deepEqual(JSON.parse(JSON.stringify(launched)), [
+    ["joplin-desktop", "--alt-instance-id", "alt1", "--no-welcome"],
+    ["joplin-desktop"]
+  ])
+})
+
+const settingsQml = readFileSync(new URL("../ProfileSettings.qml", import.meta.url), "utf8")
+
+test("leaving a profile's page with Back keeps a name that was typed", () => {
+  const saved = []
+  const work = { name: "Work", dir: "/w" }
+  const state = vm.createContext({
+    Model, mode: "edit", editIndex: 0, cursor: 0, profiles: [work], editing: work,
+    nameField: { text: "Room40" },
+    save(list) { saved.push(list) }, returnFocus() {},
+  })
+  for (const name of ["showList", "rename"]) {
+    vm.runInContext(settingsQml.match(new RegExp(`  function ${name}\\([^]*?\\n  }`))[0], state)
+  }
+  state.showList()
+  assert.equal(state.mode, "list")
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0][0].name, "Room40")
+})

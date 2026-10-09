@@ -523,8 +523,8 @@ export function parseDiscovery(text, home) {
 //
 // A profile syncs to one server, so a second server means a second Joplin
 // instance. Adding an account creates Joplin's secondary instance with its sync
-// settings already in place, and starts it: Joplin asks for the password, keeps
-// it, and does the first sync. omajop never sees the password.
+// settings already in place, and starts it. The password is entered in that
+// Joplin's sync settings, and Joplin keeps it; omajop never sees it.
 //
 // It has to be alt1. Joplin's own File > Open secondary app instance opens
 // alt1, and when a secondary instance restarts itself the main one relaunches
@@ -608,8 +608,8 @@ export function createAccountError(code, dir, joplinCommand, home) {
   return "Could not create " + where + "."
 }
 
-// The first start skips Joplin's welcome notebook, which the first sync would
-// otherwise upload into the account.
+// Any start before Joplin has created the database skips the welcome notebook,
+// which the first sync would otherwise upload into the account.
 export function firstLaunchArgv(home, dir, joplinCommand) {
   const argv = launchArgv(home, dir, joplinCommand)
   return argv.length > 0 ? argv.concat(["--no-welcome"]) : []

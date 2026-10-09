@@ -404,8 +404,14 @@ BarWidget {
   }
 
   // Starts or focuses a profile's Joplin, where its server and sign-in live.
+  // Until Joplin has created the profile's database every start is a first
+  // start, so each one skips the welcome notebook.
   function launchJoplin(dir) {
-    var argv = Model.launchArgv(Quickshell.env("HOME"), dir, joplinCommand)
+    var info = discovery.info ? discovery.info[dir] : null
+    var home = Quickshell.env("HOME")
+    var argv = info && !info.hasDatabase
+      ? Model.firstLaunchArgv(home, dir, joplinCommand)
+      : Model.launchArgv(home, dir, joplinCommand)
     if (argv.length > 0) Quickshell.execDetached(argv)
   }
 

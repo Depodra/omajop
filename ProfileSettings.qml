@@ -94,6 +94,10 @@ Item {
   }
 
   function showList() {
+    // Back is a button that does not take focus, so the name field would only
+    // save after the page it belongs to has gone. Save it first; Escape has
+    // already put the old name back.
+    if (mode === "edit") rename(nameField.text)
     if (mode === "edit" && editIndex >= 0) cursor = editIndex
     mode = "list"
     editIndex = -1
@@ -748,8 +752,9 @@ Item {
       Caption {
         text: "Each Joplin profile syncs to one server, so another server gets its own "
           + "Joplin: the secondary instance, in " + Model.contractHome(root.accountDir, root.home)
-          + ". This sets it up for the server below and starts it. Joplin asks for "
-          + "your password and keeps it; omajop never sees it."
+          + ". This sets it up for the server below and starts it. Then enter your "
+          + "password in that Joplin, under Tools → Options → Synchronisation, and "
+          + "press Apply. Joplin keeps it; omajop never sees it."
       }
 
       Caption {
