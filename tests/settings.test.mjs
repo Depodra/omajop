@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as Model from "../Model.mjs"
@@ -190,8 +190,12 @@ test("the discovery script finds instances, in-app profiles and configured direc
     const custom = join(home, "elsewhere/notes")
     profile(custom, settingsJson(10, "", "me@cloud"))
     const missing = join(home, "gone")
+    // Set up by Add account, not started yet: settings but no database.
+    const pending = join(home, "pending")
+    mkdirSync(pending)
+    writeFileSync(join(pending, "settings.json"), settingsJson(9, "https://new.example.net", "me@new"))
 
-    const argv = Model.discoveryArgv(home, [custom, missing])
+    const argv = Model.discoveryArgv(home, [custom, missing, pending])
     const output = execFileSync(argv[0], argv.slice(1), { encoding: "utf8" })
     assert.ok(output.includes(SECRET), "the raw output does carry the file")
     const result = Model.parseDiscovery(output, home)
@@ -209,7 +213,12 @@ test("the discovery script finds instances, in-app profiles and configured direc
     assert.equal(result.info[custom].account.label, "Joplin Cloud")
     // A configured directory without a database is reported, not found.
     assert.equal(result.info[missing].hasDatabase, false)
+    assert.equal(result.info[missing].exists, false)
     assert.equal(result.found.some(f => f.dir === missing), false)
+    assert.equal(result.info[pending].hasDatabase, false)
+    assert.equal(result.info[pending].exists, true)
+    assert.equal(result.info[pending].account.location, "new.example.net")
+    assert.equal(result.found.some(f => f.dir === pending), false)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -221,4 +230,108 @@ test("the discovery script never interpolates its arguments", () => {
   assert.equal(argv[2], Model.DISCOVERY_SCRIPT)
   assert.deepEqual(argv.slice(4), ["/home/$(touch pwned)", "/a b", "/c;d"])
   assert.ok(!Model.DISCOVERY_SCRIPT.includes("pwned"))
+})
+
+// --- adding an account ----------------------------------------------------------
+
+test("a server address gets https:// and loses its trailing slash", () => {
+  assert.equal(Model.normalizeServerUrl("notes.mcewan.cloud"), "https://notes.mcewan.cloud")
+  assert.equal(Model.normalizeServerUrl(" https://Notes.Example.com/ "), "https://notes.example.com")
+  assert.equal(Model.normalizeServerUrl("http://10.0.0.5:22300"), "http://10.0.0.5:22300")
+  assert.equal(Model.normalizeServerUrl("https://example.com/joplin/"), "https://example.com/joplin")
+  for (const bad of ["", "   ", "ftp://example.com", "https://", "exa mple.com", "https://.example.com",
+    "https://a..b", "https://example.com/?x=1", "javascript:alert(1)"]) {
+    assert.equal(Model.normalizeServerUrl(bad), "", bad)
+  }
+})
+
+test("an email needs exactly one @ and no spaces", () => {
+  assert.equal(Model.normalizeEmail(" me@example.com "), "me@example.com")
+  for (const bad of ["", "me", "me@", "@example.com", "me@@example.com", "m e@example.com"]) {
+    assert.equal(Model.normalizeEmail(bad), "", bad)
+  }
+})
+
+test("the form says what is missing, server first", () => {
+  assert.match(Model.accountFormProblem("", ""), /server/)
+  assert.match(Model.accountFormProblem("notes.example.com", "nope"), /email/)
+  assert.equal(Model.accountFormProblem("notes.example.com", "me@example.com"), "")
+})
+
+test("a new account's settings read back as that server and user", () => {
+  const json = Model.newAccountSettings("https://notes.mcewan.cloud", "me@mcewan.cloud")
+  assert.deepEqual(Model.accountSummary(JSON.parse(json)),
+    { target: 9, label: "Joplin Server", location: "notes.mcewan.cloud", user: "me@mcewan.cloud" })
+  // Only the three sync settings, so nothing else of Joplin's is decided here.
+  assert.deepEqual(Object.keys(JSON.parse(json)).sort(),
+    ["$schema", "sync.9.path", "sync.9.username", "sync.target"])
+})
+
+test("the new account is Joplin's secondary instance, started without welcome notes", () => {
+  assert.equal(Model.newAccountDir(HOME), ROOT + "-alt1")
+  assert.deepEqual(Model.firstLaunchArgv(HOME, ROOT + "-alt1", ""),
+    ["joplin-desktop", "--alt-instance-id", "alt1", "--no-welcome"])
+  assert.deepEqual(Model.firstLaunchArgv(HOME, ROOT + "/profile-a1", ""), [])
+})
+
+function runCreate(home, dir, joplin) {
+  const json = Model.newAccountSettings("https://notes.example.com", "me@example.com")
+  const argv = Model.createAccountArgv(dir, json, joplin)
+  try {
+    execFileSync(argv[0], argv.slice(1), { stdio: "ignore" })
+    return 0
+  } catch (error) {
+    return error.status
+  }
+}
+
+test("the create script writes the instance's settings and nothing else", () => {
+  const home = mkdtempSync(join(tmpdir(), "omajop-create-"))
+  try {
+    const dir = Model.newAccountDir(home)
+    // `true` stands in for joplin-desktop: it only has to be found.
+    assert.equal(runCreate(home, dir, "true"), 0)
+    assert.deepEqual(readdirSync(dir), ["settings.json"])
+    const written = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"))
+    assert.equal(Model.accountSummary(written).location, "notes.example.com")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("the create script never touches an existing directory", () => {
+  const home = mkdtempSync(join(tmpdir(), "omajop-create-"))
+  try {
+    const dir = Model.newAccountDir(home)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "settings.json"), "{\"sync.target\": 2}")
+    assert.equal(runCreate(home, dir, "true"), 4)
+    assert.equal(readFileSync(join(dir, "settings.json"), "utf8"), "{\"sync.target\": 2}")
+    // An empty directory is someone else's too.
+    const empty = join(home, "empty")
+    mkdirSync(empty)
+    assert.equal(runCreate(home, empty, "true"), 4)
+    assert.deepEqual(readdirSync(empty), [])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("without Joplin the create script writes nothing", () => {
+  const home = mkdtempSync(join(tmpdir(), "omajop-create-"))
+  try {
+    const dir = Model.newAccountDir(home)
+    assert.equal(runCreate(home, dir, "omajop-no-such-joplin"), 3)
+    assert.deepEqual(readdirSync(home), [])
+    assert.match(Model.createAccountError(3, dir, "omajop-no-such-joplin", home), /not found/)
+    assert.match(Model.createAccountError(4, dir, "", home), /already exists/)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("the create script takes every value as an argument", () => {
+  const argv = Model.createAccountArgv("/d/$(x)", "{\"a\": \"$(y)\"}", "joplin;z")
+  assert.equal(argv[2], Model.CREATE_ACCOUNT_SCRIPT)
+  assert.deepEqual(argv.slice(4), ["/d/$(x)", "{\"a\": \"$(y)\"}", "joplin;z"])
 })

@@ -380,8 +380,9 @@ export const DISCOVERY_SCRIPT = [
   'home=$1; shift',
   'emit() {',
   '  if [ -f "$1/database.sqlite" ]; then db=1; else db=0; fi',
-  '  printf \'\\036D\\037%s\\037%s\\037\' "$1" "$db"',
-  '  [ "$db" = 1 ] && head -c ' + DISCOVERY_READ_BYTES + ' "$1/settings.json" 2>/dev/null',
+  '  if [ -d "$1" ]; then here=1; else here=0; fi',
+  '  printf \'\\036D\\037%s\\037%s%s\\037\' "$1" "$db" "$here"',
+  '  [ -f "$1/settings.json" ] && head -c ' + DISCOVERY_READ_BYTES + ' "$1/settings.json" 2>/dev/null',
   '  return 0',
   '}',
   'for root in "$home/.config/joplin-desktop" "$home"/.config/joplin-desktop-*; do',
@@ -496,12 +497,15 @@ export function parseDiscovery(text, home) {
     }
     if (type !== "D" || info[dir]) continue
 
-    const hasDatabase = fields[2] === "1"
+    // Flags: database present, directory present. A directory Joplin has not
+    // started on yet can still carry the settings.json an added account wrote.
+    const hasDatabase = fields[2].charAt(0) === "1"
     info[dir] = {
       dir: dir,
       kind: profileKind(home, dir),
       hasDatabase: hasDatabase,
-      account: accountSummary(hasDatabase ? parseJsonObject(body) : null),
+      exists: hasDatabase || fields[2].charAt(1) === "1",
+      account: accountSummary(parseJsonObject(body)),
       joplinName: ""
     }
     order.push(dir)
@@ -513,6 +517,102 @@ export function parseDiscovery(text, home) {
     if (info[dir].hasDatabase) found.push(info[dir])
   }
   return { found: found, info: info }
+}
+
+// --- adding an account -------------------------------------------------------
+//
+// A profile syncs to one server, so a second server means a second Joplin
+// instance. Adding an account creates Joplin's secondary instance with its sync
+// settings already in place, and starts it: Joplin asks for the password, keeps
+// it, and does the first sync. omajop never sees the password.
+//
+// It has to be alt1. Joplin's own File > Open secondary app instance opens
+// alt1, and when a secondary instance restarts itself the main one relaunches
+// alt1 whatever the instance was started as.
+
+export const ACCOUNT_INSTANCE_ID = "alt1"
+
+export function newAccountDir(home) {
+  return profileDirectory(home, "") + "-" + ACCOUNT_INSTANCE_ID
+}
+
+// A bare host gets https://; anything that is not an http(s) URL is refused.
+export function normalizeServerUrl(text) {
+  let value = plainLine(text)
+  if (value === "") return ""
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) value = "https://" + value
+  const match = /^(https?):\/\/([A-Za-z0-9.-]+(?::[0-9]{1,5})?)(\/[^\s?#]*)?$/i.exec(value)
+  if (!match || match[2].charAt(0) === "." || match[2].indexOf("..") >= 0) return ""
+  const path = (match[3] || "").replace(/\/+$/, "")
+  return match[1].toLowerCase() + "://" + match[2].toLowerCase() + path
+}
+
+export function normalizeEmail(text) {
+  const value = plainLine(text)
+  return /^[^\s@]+@[^\s@]+$/.test(value) ? value : ""
+}
+
+// Why the add-account form cannot be submitted yet, or "".
+export function accountFormProblem(serverText, emailText) {
+  if (normalizeServerUrl(serverText) === "") return "Enter the server's address, like notes.example.com."
+  if (normalizeEmail(emailText) === "") return "Enter the email you sign in with."
+  return ""
+}
+
+// The new instance's settings.json: Joplin Server, its URL and the email. These
+// three are file-stored settings, read when Joplin first starts on the
+// directory; the password is a secure setting Joplin keeps itself.
+export function newAccountSettings(server, email) {
+  return JSON.stringify({
+    "$schema": "https://joplinapp.org/schema/settings.json",
+    "sync.target": 9,
+    "sync.9.path": server,
+    "sync.9.username": email
+  }, null, 2)
+}
+
+// Creates the instance directory and writes its settings.json, and nothing
+// else: Joplin is started separately, once this has succeeded. The directory is
+// made with a plain mkdir, which fails if it exists, so an existing instance is
+// never written to; set -C stops the file being clobbered all the same. Joplin
+// is looked for first, so a machine without it is left untouched.
+//   3  the Joplin command was not found
+//   4  the directory already exists
+//   5  the directory or file could not be written
+export const CREATE_ACCOUNT_SCRIPT = [
+  'dir=$1; settings=$2; joplin=$3',
+  'command -v "$joplin" >/dev/null 2>&1 || exit 3',
+  '[ -e "$dir" ] && exit 4',
+  'mkdir -p "$(dirname "$dir")" || exit 5',
+  'mkdir "$dir" 2>/dev/null || exit 4',
+  'set -C',
+  'printf \'%s\\n\' "$settings" > "$dir/settings.json" || exit 5',
+  'exit 0'
+].join("\n")
+
+export function createAccountArgv(dir, settingsJson, joplinCommand) {
+  return ["sh", "-c", CREATE_ACCOUNT_SCRIPT, "omajop-create",
+    String(dir || ""), String(settingsJson || ""), joplinExecutable(joplinCommand)]
+}
+
+export function createAccountError(code, dir, joplinCommand, home) {
+  const where = contractHome(dir, home)
+  if (code === 3) {
+    return "Joplin was not found as \"" + joplinExecutable(joplinCommand)
+      + "\". Set the Joplin command under Opening notes, then try again."
+  }
+  if (code === 4) {
+    return where + " already exists. Add it from Found on this computer and set "
+      + "its server in Joplin instead."
+  }
+  return "Could not create " + where + "."
+}
+
+// The first start skips Joplin's welcome notebook, which the first sync would
+// otherwise upload into the account.
+export function firstLaunchArgv(home, dir, joplinCommand) {
+  const argv = launchArgv(home, dir, joplinCommand)
+  return argv.length > 0 ? argv.concat(["--no-welcome"]) : []
 }
 
 // A starting name for a profile added from the found list: the one Joplin

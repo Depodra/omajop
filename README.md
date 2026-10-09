@@ -102,10 +102,16 @@ instance, every secondary instance beside it, and the profiles created with
 a directory Joplin is started on with `--profile`. With more than one listed,
 the panel header turns into a switcher.
 
+Choosing a listed profile opens its page: its name, the server and email it
+syncs with, and **Open in Joplin**, which starts that profile's Joplin — or
+brings it forward — so its server and sign-in can be changed under **Tools →
+Options → Synchronisation**. They belong to Joplin: the password in particular
+is kept in Joplin's secure storage, out of omajop's reach.
+
 | Key, in the settings | |
 |---|---|
 | `↑` `↓` or `j` `k` | Move between profiles |
-| `Enter` | Rename a listed profile, or add a found one |
+| `Enter` | Open a listed profile's page, or add a found one |
 | `J` `K` | Move a listed profile down / up — the first is the one the panel opens on |
 | `x` | Remove a listed profile. Joplin and its notes are not touched |
 | `Esc` | Back to the notes |
@@ -115,6 +121,23 @@ Changes are saved as they are made, to the widget's entry in
 its own entry. Finding profiles reads each one's `settings.json`, which also
 holds the Web Clipper's API token; only the sync target, its server or path,
 and the username are taken from it and shown.
+
+#### Adding an account
+
+**Add a Joplin Server account…** takes a name, the server's address and the
+email you sign in with, and creates the second Joplin those need: the secondary
+instance in `~/.config/joplin-desktop-alt1`, with its `settings.json` already
+pointing at the server. It adds the profile to the list and starts Joplin on it
+with `--no-welcome`, so the welcome notebook is not uploaded into the account on
+the first sync. Joplin asks for the password; once it has synced, the notes show
+up here.
+
+It is always `alt1`. Joplin's own **File → Open secondary app instance** opens
+`alt1`, and when a secondary instance restarts itself, the main instance
+relaunches `alt1` whatever it was started as, so any other name would come back
+as an empty instance. If `alt1` already exists, the form says so: add it from
+the found list instead, or give a further account its own directory with
+`--profile`.
 
 The list is stored as `profiles`, which can also be written by hand. Each entry
 is a `name` and a `path`; a missing `path` means the default profile, and a bare
@@ -171,12 +194,19 @@ the `sqlite3` CLI. That is a deliberate choice over Joplin's Data API:
 - **Quickshell has no SQLite binding**, so either route means shelling out.
   `sqlite3 -readonly -json` is less machinery than HTTP, not more.
 
-### The one hard rule: it never writes
+### The one hard rule: it never writes to a profile
 
 Joplin tracks local changes across `item_changes`, `sync_items`, and
 `deleted_items`. A direct `UPDATE` to `notes` bypasses all of it, so the edit
 would either never sync or be clobbered on the next pull. omajop opens the
-database `-readonly` and has no code path that writes.
+database `-readonly` and has no code path that writes to it, or to any file of
+a profile Joplin has created.
+
+The one file it ever creates is for a [new account](#adding-an-account): the
+`settings.json` of an instance directory it has just made, holding the sync
+target, server and email. The directory is made with a plain `mkdir`, so if
+anything is already there nothing is written, and from then on the file is
+Joplin's.
 
 Editing is therefore delegated: **Open in Joplin** (`Enter`, or the button above
 the preview) hands the note to the desktop app over its registered

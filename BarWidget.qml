@@ -409,6 +409,54 @@ BarWidget {
     if (argv.length > 0) Quickshell.execDetached(argv)
   }
 
+  // Adding an account: see Model's "adding an account". The last attempt's
+  // outcome, for the form to show.
+  property string accountMessage: ""
+  property bool accountFailed: false
+  property var pendingAccount: null
+  readonly property bool creatingAccount: createProcess.running
+
+  function createAccount(name, serverText, emailText) {
+    if (createProcess.running) return
+    var problem = Model.accountFormProblem(serverText, emailText)
+    if (problem !== "") {
+      accountFailed = true
+      accountMessage = problem
+      return
+    }
+    var home = Quickshell.env("HOME")
+    var dir = Model.newAccountDir(home)
+    var server = Model.normalizeServerUrl(serverText)
+    pendingAccount = { name: name, dir: dir, server: server }
+    accountFailed = false
+    accountMessage = ""
+    createProcess.command = Model.createAccountArgv(dir,
+      Model.newAccountSettings(server, Model.normalizeEmail(emailText)), joplinCommand)
+    createProcess.running = true
+  }
+
+  function finishCreateAccount(exitCode) {
+    var account = pendingAccount
+    pendingAccount = null
+    if (!account) return
+    var home = Quickshell.env("HOME")
+    if (exitCode !== 0) {
+      accountFailed = true
+      accountMessage = Model.createAccountError(exitCode, account.dir, joplinCommand, home)
+      discoverProfiles()
+      return
+    }
+    saveProfiles(Model.addProfile(profiles, account.dir,
+      account.name || Model.suggestedProfileName({ dir: account.dir, kind: "",
+        account: Model.accountSummary({ "sync.target": 9, "sync.9.path": account.server }) })))
+    Quickshell.execDetached(Model.firstLaunchArgv(home, account.dir, joplinCommand))
+    accountFailed = false
+    accountMessage = "Joplin is starting for " + Model.contractHome(account.dir, home)
+      + ". Enter your password there, under Tools → Options → Synchronisation, "
+      + "then press Apply. Its notes appear here after the first sync."
+    discoverProfiles()
+  }
+
   function saveJoplinCommand(text) {
     var next = Model.normalizeJoplinCommand(text)
     if (next !== joplinCommand) saveSettings({ joplinCommand: next })
@@ -425,7 +473,8 @@ BarWidget {
       discoveryPending = true
       return
     }
-    var dirs = []
+    // The listed profiles, and where Add account would create one.
+    var dirs = [Model.newAccountDir(Quickshell.env("HOME"))]
     for (var i = 0; i < profiles.length; i++) dirs.push(profiles[i].dir)
     discoverProcess.command = Model.discoveryArgv(Quickshell.env("HOME"), dirs)
     discoverProcess.running = true
@@ -612,6 +661,14 @@ BarWidget {
   }
 
   QueryWatchdog { query: discoverProcess }
+
+  Process {
+    id: createProcess
+    running: false
+    onExited: function(exitCode) { root.finishCreateAccount(exitCode) }
+  }
+
+  QueryWatchdog { query: createProcess }
 
   Loader {
     id: panelLoader

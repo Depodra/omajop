@@ -36,7 +36,7 @@ Item {
     return out
   }
 
-  // "list", or "edit" for the profile at editIndex.
+  // "list", "edit" for the profile at editIndex, or "add" for a new account.
   property string mode: "list"
   property int editIndex: -1
   readonly property var editing: mode === "edit" && editIndex >= 0 && editIndex < profiles.length
@@ -46,7 +46,23 @@ Item {
   property int cursor: 0
   readonly property int rowCount: profiles.length + available.length
   readonly property bool typing: pathField.activeFocus || commandField.activeFocus
-    || nameField.activeFocus
+    || nameField.activeFocus || accountNameField.activeFocus
+    || serverField.activeFocus || emailField.activeFocus
+
+  // Where Add account creates the instance, and whether something is there.
+  readonly property string accountDir: Model.newAccountDir(home)
+  readonly property var accountDirInfo: infoFor(accountDir)
+  readonly property bool accountDirTaken: !!accountDirInfo && accountDirInfo.exists
+
+  // A listed profile Joplin has not created its database in yet: an account
+  // just added, typically. Its notes appear once Joplin has started on it.
+  readonly property bool waitingForJoplin: {
+    for (var i = 0; i < profiles.length; i++) {
+      var info = infoFor(profiles[i].dir)
+      if (info && info.exists && !info.hasDatabase) return true
+    }
+    return false
+  }
 
   function clampCursor() {
     cursor = Math.max(0, Math.min(rowCount - 1, cursor))
@@ -81,6 +97,26 @@ Item {
     if (mode === "edit" && editIndex >= 0) cursor = editIndex
     mode = "list"
     editIndex = -1
+    returnFocus()
+  }
+
+  function openAdd() {
+    mode = "add"
+    editIndex = -1
+    if (hostWidget) {
+      hostWidget.accountMessage = ""
+      hostWidget.accountFailed = false
+    }
+    accountNameField.text = ""
+    serverField.text = ""
+    emailField.text = ""
+    if (!accountDirTaken) accountNameField.forceActiveFocus()
+    else returnFocus()
+  }
+
+  function submitAccount() {
+    if (!hostWidget || accountDirTaken) return
+    hostWidget.createAccount(Model.plainLine(accountNameField.text), serverField.text, emailField.text)
     returnFocus()
   }
 
@@ -142,23 +178,37 @@ Item {
     return discovery.info ? discovery.info[dir] || null : null
   }
 
+  // Set up for a server, but Joplin has not started on it yet.
+  function notStarted(info) {
+    return !!info && !info.hasDatabase && info.exists && info.account.target > 0
+  }
+
   // What a profile syncs to, or why its notes cannot be read.
   function accountText(dir) {
     var info = infoFor(dir)
     if (!info) return hostWidget && hostWidget.discovering ? "…" : ""
+    if (notStarted(info)) return "Not started yet  ·  " + Model.accountLine(info.account)
+    if (!info.exists) return "Folder not found"
     if (!info.hasDatabase) return "No Joplin database here yet"
     return Model.accountLine(info.account)
   }
 
   function problem(dir) {
     var info = infoFor(dir)
-    return !!info && !info.hasDatabase
+    return !!info && !info.hasDatabase && !notStarted(info)
   }
 
   // The listed profile's page follows it if the list is edited elsewhere.
   onProfilesChanged: {
     Qt.callLater(root.clampCursor)
     if (mode === "edit" && !editing) showList()
+  }
+
+  Timer {
+    interval: 4000
+    repeat: true
+    running: root.visible && root.waitingForJoplin && !!root.hostWidget && root.hostWidget.opened
+    onTriggered: root.hostWidget.discoverProfiles()
   }
 
   component Caption: Text {
@@ -360,6 +410,12 @@ Item {
             }
           }
         }
+      }
+
+      SmallButton {
+        text: "Add a Joplin Server account…"
+        enabled: root.profiles.length < Model.MAX_PROFILES
+        onClicked: root.openAdd()
       }
 
       Spacer {}
@@ -593,9 +649,9 @@ Item {
         text: {
           var info = editColumn.info
           if (!info) return root.hostWidget && root.hostWidget.discovering ? "…" : ""
-          if (!info.hasDatabase) return "No Joplin database here yet"
-          if (info.account.target === 0) return "Not syncing"
-          return info.account.label
+          if (info.account.target > 0) return info.account.label
+          if (!info.exists) return "Folder not found"
+          return info.hasDatabase ? "Not syncing" : "No Joplin database here yet"
         }
         textFormat: Text.PlainText
         color: root.problem(editColumn.dir) ? Color.urgent : root.contentForeground
@@ -607,10 +663,14 @@ Item {
         visible: text !== ""
         text: {
           var info = editColumn.info
-          if (!info || !info.hasDatabase) return ""
+          if (!info) return ""
           var lines = []
           if (info.account.location) lines.push("Server: " + info.account.location)
-          if (info.account.user) lines.push("Signed in as: " + info.account.user)
+          if (info.account.user) lines.push("Email: " + info.account.user)
+          if (root.notStarted(info)) {
+            lines.push("Joplin has not started on this profile yet. Open it in Joplin "
+              + "and enter the password under Tools → Options → Synchronisation.")
+          }
           return lines.join("\n")
         }
       }
@@ -637,6 +697,141 @@ Item {
       Caption {
         text: Model.profileKindLabel(editColumn.kind, root.home, editColumn.dir)
           + "\n" + Model.contractHome(editColumn.dir, root.home)
+      }
+    }
+  }
+
+  // --- a new account ----------------------------------------------------------
+
+  Flickable {
+    id: addScroller
+    anchors.fill: parent
+    visible: root.mode === "add"
+    contentWidth: width
+    contentHeight: addColumn.implicitHeight
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
+    interactive: contentHeight > height
+
+    Column {
+      id: addColumn
+      width: addScroller.width
+      spacing: Style.space(6)
+
+      readonly property bool busy: !!root.hostWidget && root.hostWidget.creatingAccount
+      readonly property string problem: Model.accountFormProblem(serverField.text, emailField.text)
+      readonly property bool succeeded: !!root.hostWidget && root.hostWidget.accountMessage !== ""
+        && !root.hostWidget.accountFailed
+
+      Row {
+        spacing: Style.space(8)
+
+        PanelActionButton {
+          iconText: "\uf060"
+          tooltipText: "Back  ·  Esc"
+          foreground: root.contentForeground
+          fontFamily: root.contentFontFamily
+          onClicked: root.showList()
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Add a Joplin Server account"
+          textFormat: Text.PlainText
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.subtitle
+          font.bold: true
+        }
+      }
+
+      Caption {
+        text: "Each Joplin profile syncs to one server, so another server gets its own "
+          + "Joplin: the secondary instance, in " + Model.contractHome(root.accountDir, root.home)
+          + ". This sets it up for the server below and starts it. Joplin asks for "
+          + "your password and keeps it; omajop never sees it."
+      }
+
+      Caption {
+        visible: root.accountDirTaken && !addColumn.succeeded
+        color: Color.urgent
+        text: {
+          var info = root.accountDirInfo
+          var where = Model.contractHome(root.accountDir, root.home)
+          var syncing = info && info.account.target > 0
+            ? ", set up for " + Model.accountLine(info.account) : ""
+          var listed = Model.indexOfProfile(root.profiles, root.accountDir) >= 0
+          return "Joplin's secondary instance already exists in " + where + syncing + ". "
+            + (listed ? "It is in your list; " : "Add it from Found on this computer, and ")
+            + "change its server from its page, in Joplin. Another account needs its "
+            + "own directory: start Joplin with --profile <directory>, then add that "
+            + "directory to the list."
+        }
+      }
+
+      Spacer {}
+
+      Header { text: "NAME" }
+
+      SmallField {
+        id: accountNameField
+        enabled: !root.accountDirTaken && !addColumn.busy
+        placeholderText: "Personal"
+        KeyNavigation.tab: serverField
+        onAccepted: serverField.forceActiveFocus()
+        Keys.onEscapePressed: root.showList()
+      }
+
+      Header { text: "SERVER" }
+
+      SmallField {
+        id: serverField
+        enabled: !root.accountDirTaken && !addColumn.busy
+        placeholderText: "notes.example.com"
+        KeyNavigation.tab: emailField
+        KeyNavigation.backtab: accountNameField
+        onAccepted: emailField.forceActiveFocus()
+        Keys.onEscapePressed: root.showList()
+      }
+
+      Header { text: "EMAIL" }
+
+      SmallField {
+        id: emailField
+        enabled: !root.accountDirTaken && !addColumn.busy
+        placeholderText: "you@example.com"
+        KeyNavigation.backtab: serverField
+        onAccepted: if (addColumn.problem === "") root.submitAccount()
+        Keys.onEscapePressed: root.showList()
+      }
+
+      Spacer {}
+
+      Row {
+        spacing: Style.space(10)
+
+        SmallButton {
+          text: addColumn.busy ? "Creating…" : "Create and open Joplin"
+          enabled: !root.accountDirTaken && !addColumn.busy && addColumn.problem === ""
+          onClicked: root.submitAccount()
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          visible: (serverField.text !== "" || emailField.text !== "") && addColumn.problem !== ""
+            && !root.accountDirTaken
+          text: addColumn.problem
+          textFormat: Text.PlainText
+          color: root.mutedForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      Caption {
+        visible: !!root.hostWidget && root.hostWidget.accountMessage !== ""
+        text: root.hostWidget ? root.hostWidget.accountMessage : ""
+        color: root.hostWidget && root.hostWidget.accountFailed ? Color.urgent : root.contentForeground
       }
     }
   }
