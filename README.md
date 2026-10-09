@@ -42,6 +42,7 @@ To hack on it instead of just running it, see [Development](#development).
 | `g` `G` | Jump the preview to the top / bottom |
 | `Enter` | Open the selected note in Joplin |
 | `/` | Focus the search box |
+| `s` or `,` | Open / close the [profile settings](#multiple-profiles) |
 | `p` `P` | Next / previous profile, when there are [several](#multiple-profiles) |
 | `1`–`9` | Jump to that profile |
 | `r` | Refresh |
@@ -68,8 +69,8 @@ below are what it uses when `shell.json` says nothing about it.
 | Key | Default | Change it when |
 |---|---|---|
 | `profilePath` | `~/.config/joplin-desktop` | Your profile is elsewhere — a portable profile, or a second Joplin started with `--profile` |
-| `profiles` | — | You browse more than one profile; see [Multiple profiles](#multiple-profiles). Replaces `profilePath` |
-| `joplinCommand` | `joplin-desktop` | Joplin is not on `PATH` under that name — an AppImage, say. Only used to open notes from a profile other than the default one |
+| `profiles` | — | You browse more than one profile. Edited from the panel; see [Multiple profiles](#multiple-profiles). Replaces `profilePath` |
+| `joplinCommand` | `joplin-desktop` | Joplin is not on `PATH` under that name — an AppImage, say. Only used to open notes from a profile other than the default one. Also in the profile settings |
 | `sortBy` | `updated` | You would rather browse alphabetically: `title` |
 | `refreshSeconds` | `60` | You want outside edits noticed sooner, or less polling on battery. 5–3600 |
 
@@ -92,22 +93,42 @@ personal one therefore live in two profiles, and the usual way to have both
 open is a second instance of the app: **File → Open secondary app instance…**
 starts one with its own profile in `~/.config/joplin-desktop-alt1`.
 
-List the profiles to browse, and the panel header turns into a switcher:
+Press `s` in the panel, or click the gear, for the profile settings. They list
+the profiles the panel browses, each with where it lives and what it syncs to —
+`Joplin Server · notes.example.com · you@example.com` — and below them the
+Joplin profiles found on this machine that are not listed yet: the main
+instance, every secondary instance beside it, and the profiles created with
+**File → Switch profile** inside each. Add one with a click, or type the path of
+a directory Joplin is started on with `--profile`. With more than one listed,
+the panel header turns into a switcher.
 
-```bash
-omarchy bar set io.github.renerocksai.omajop profiles \
-  '[{"name": "Work"}, {"name": "Personal", "path": "~/.config/joplin-desktop-alt1"}]'
+| Key, in the settings | |
+|---|---|
+| `↑` `↓` or `j` `k` | Move between profiles |
+| `Enter` | Rename a listed profile, or add a found one |
+| `J` `K` | Move a listed profile down / up — the first is the one the panel opens on |
+| `x` | Remove a listed profile. Joplin and its notes are not touched |
+| `Esc` | Back to the notes |
+
+Changes are saved as they are made, to the widget's entry in
+`~/.config/omarchy/shell.json`, through the write the shell grants a plugin for
+its own entry. Finding profiles reads each one's `settings.json`, which also
+holds the Web Clipper's API token; only the sync target, its server or path,
+and the username are kept from it.
+
+The list is stored as `profiles`, which can also be written by hand. Each entry
+is a `name` and a `path`; a missing `path` means the default profile, and a bare
+string is a path with no name. Up to nine are kept — one per digit key.
+
+```json
+{ "id": "io.github.renerocksai.omajop",
+  "profiles": [{ "name": "Work" }, { "name": "Personal", "path": "~/.config/joplin-desktop-alt1" }] }
 ```
 
-Without `--json` the list is stored as text, which omajop parses. With it, the
-shell's IPC splits the array at its commas before the setting is written.
-
-Each entry is a `name` and a `path`. A missing `path` means the default
-profile, and a bare string is a path with no name, so the directory's name is
-shown instead. Up to nine are listed — one per digit key. The first is the one
-the panel opens on. `profiles` is not in the manifest's schema, because the
-settings form has no field for a list; set it as above, or as a real array in
-`shell.json`.
+`profiles` is not in the manifest's schema, because the settings form has no
+field for a list. From a script, pass it to `omarchy bar set` as text, without
+`--json`: with it, the shell's IPC splits an array at its commas before the
+setting is written.
 
 **Open in Joplin** has to reach the instance that owns the note, not just any
 Joplin: `xdg-open` on a `joplin://` link always lands in the default instance,

@@ -27,9 +27,11 @@ BarWidget {
   readonly property var profiles: Model.normalizeProfiles(
     setting("profiles", null), profilePath, Quickshell.env("HOME"))
   readonly property bool multipleProfiles: profiles.length > 1
-  // Which profile is browsed. Not persisted: the first one is the default.
-  property int activeProfileIndex: 0
-  readonly property int profileIndex: Model.clampProfileIndex(activeProfileIndex, profiles.length)
+  // Which profile is browsed, by directory, so reordering or renaming the list
+  // never changes what is on screen; one that is removed falls back to the
+  // first. Not persisted: the first one is the default.
+  property string activeProfileDir: ""
+  readonly property int profileIndex: Math.max(0, Model.indexOfProfile(profiles, activeProfileDir))
   readonly property string profileName: profiles[profileIndex].name
 
   readonly property string profileDir: profiles[profileIndex].dir
@@ -345,7 +347,7 @@ BarWidget {
   // --- profiles -------------------------------------------------------------
 
   function selectProfile(index) {
-    activeProfileIndex = Model.clampProfileIndex(index, profiles.length)
+    activeProfileDir = profiles[Model.clampProfileIndex(index, profiles.length)].dir
   }
 
   function cycleProfile(delta) {
@@ -375,6 +377,65 @@ BarWidget {
   }
 
   onProfileDirChanged: resetForProfile()
+
+  // --- settings -------------------------------------------------------------
+  // The settings view edits the profile list and joplinCommand. Saving copies
+  // every existing key, applies it locally so the panel updates on the click,
+  // and writes the widget's shell.json entry through the scoped facade the
+  // shell hands a plugin for its own entry; the write comes back through the
+  // bar as the same value.
+
+  readonly property bool canSaveSettings: !!(bar && bar.shell
+    && typeof bar.shell.updateEntryInline === "function")
+
+  function saveSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+    root.settings = entry
+    if (canSaveSettings) bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function saveProfiles(list) {
+    saveSettings({ profiles: Model.profileEntries(list, Quickshell.env("HOME")) })
+  }
+
+  function saveJoplinCommand(text) {
+    var next = Model.normalizeJoplinCommand(text)
+    if (next !== joplinCommand) saveSettings({ joplinCommand: next })
+  }
+
+  // Profiles found on disk and each listed one's account: {found, info}, from
+  // Model.parseDiscovery. Only read while the settings view is open.
+  property var discovery: ({ found: [], info: ({}) })
+  property bool discoveryPending: false
+  readonly property bool discovering: discoverProcess.running
+
+  function discoverProfiles() {
+    if (discoverProcess.running) {
+      discoveryPending = true
+      return
+    }
+    var dirs = []
+    for (var i = 0; i < profiles.length; i++) dirs.push(profiles[i].dir)
+    discoverProcess.command = Model.discoveryArgv(Quickshell.env("HOME"), dirs)
+    discoverProcess.running = true
+  }
+
+  function finishDiscovery(exitCode) {
+    // The raw output carries every settings.json it read, API token and all;
+    // only the parsed summary is kept.
+    try {
+      discovery = Model.parseDiscovery(exitCode === 0 ? discoverStdout.text || "" : "",
+        Quickshell.env("HOME"))
+    } catch (error) {
+      discovery = ({ found: [], info: ({}) })
+    }
+    if (discoveryPending) {
+      discoveryPending = false
+      discoverProfiles()
+    }
+  }
 
   // --- panel plumbing -------------------------------------------------------
   // Shape the bar host and popout coordinator expect from a widget with a panel.
@@ -533,6 +594,15 @@ BarWidget {
   }
 
   QueryWatchdog { query: bodyProcess }
+
+  Process {
+    id: discoverProcess
+    running: false
+    stdout: StdioCollector { id: discoverStdout; waitForEnd: true }
+    onExited: function(exitCode) { root.finishDiscovery(exitCode) }
+  }
+
+  QueryWatchdog { query: discoverProcess }
 
   Loader {
     id: panelLoader

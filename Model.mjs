@@ -212,6 +212,35 @@ export function joplinExecutable(command) {
   return value !== "" ? value : DEFAULT_JOPLIN_COMMAND
 }
 
+// The four places a profile can live, which decide how it is opened and how
+// the settings view describes it.
+export const PROFILE_DEFAULT = "default"    // ~/.config/joplin-desktop
+export const PROFILE_INSTANCE = "instance"  // ~/.config/joplin-desktop-<id>
+export const PROFILE_IN_APP = "in-app"      // <instance>/profile-<id>, File > Switch profile
+export const PROFILE_CUSTOM = "custom"      // anything else, started with --profile
+
+// Joplin derives a secondary instance's directory from its id the same way.
+function instanceId(home, dir) {
+  const root = profileDirectory(home, "")
+  const id = dir.indexOf(root + "-") === 0 ? dir.slice(root.length + 1) : ""
+  return /^[A-Za-z0-9_-]+$/.test(id) ? id : ""
+}
+
+export function profileKindLabel(kind, home, profileDir) {
+  if (kind === PROFILE_DEFAULT) return "Main instance"
+  if (kind === PROFILE_INSTANCE) return "Secondary instance " + instanceId(home, stripTrailingSlash(profileDir))
+  if (kind === PROFILE_IN_APP) return "In-app profile"
+  return "Profile directory"
+}
+
+export function profileKind(home, profileDir) {
+  const dir = stripTrailingSlash(profileDir)
+  if (dir === profileDirectory(home, "")) return PROFILE_DEFAULT
+  if (instanceId(home, dir) !== "") return PROFILE_INSTANCE
+  if (/^profile-[A-Za-z0-9_-]+$/.test(baseName(dir))) return PROFILE_IN_APP
+  return PROFILE_CUSTOM
+}
+
 // "Open in Joplin" has to reach the instance that owns the profile: xdg-open
 // always starts the default instance, which would look the note up in the wrong
 // database. A joplin-desktop started with the same profile flags hands its argv
@@ -223,20 +252,16 @@ export function joplinExecutable(command) {
 // the note cannot be opened from here.
 export function openTarget(home, profileDir, joplinCommand) {
   const dir = stripTrailingSlash(profileDir)
-  const root = profileDirectory(home, "")
-  if (dir === root) return { argv: ["xdg-open"], reason: "" }
+  const kind = profileKind(home, dir)
+  if (kind === PROFILE_DEFAULT) return { argv: ["xdg-open"], reason: "" }
 
-  // Joplin derives a secondary instance's directory from its id the same way.
-  const altId = dir.indexOf(root + "-") === 0 ? dir.slice(root.length + 1) : ""
   const command = joplinExecutable(joplinCommand)
-  if (/^[A-Za-z0-9_-]+$/.test(altId)) {
-    return { argv: [command, "--alt-instance-id", altId], reason: "" }
+  if (kind === PROFILE_INSTANCE) {
+    return { argv: [command, "--alt-instance-id", instanceId(home, dir)], reason: "" }
   }
 
-  // A profile created with File > Switch profile lives in profile-<id> inside
-  // its instance's directory, and only the instance's active profile can be
-  // addressed from outside the app.
-  if (/^profile-[A-Za-z0-9_-]+$/.test(baseName(dir))) {
+  // Only an instance's active profile can be addressed from outside the app.
+  if (kind === PROFILE_IN_APP) {
     return {
       argv: [],
       reason: "Joplin can only open this profile's notes while it is the active "
@@ -247,11 +272,247 @@ export function openTarget(home, profileDir, joplinCommand) {
   return { argv: [command, "--profile", dir], reason: "" }
 }
 
+
 export function openArgv(home, profileDir, noteId, joplinCommand) {
   const url = noteUrl(noteId)
   const target = openTarget(home, profileDir, joplinCommand)
   if (url === "" || target.argv.length === 0) return []
   return target.argv.concat([url])
+}
+
+// The browsed profile is tracked by directory, so reordering or renaming the
+// list never changes what is on screen. -1 when it is no longer listed.
+export function indexOfProfile(profiles, dir) {
+  const list = profiles || []
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].dir === dir) return i
+  }
+  return -1
+}
+
+// --- editing the profile list -----------------------------------------------
+//
+// The settings view edits [{name, dir}] with these and saves the result as
+// `profiles`. Each returns a new list and leaves its input alone.
+
+export function addProfile(profiles, dir, name) {
+  const list = (profiles || []).slice()
+  const target = stripTrailingSlash(normalizeProfilePath(dir))
+  if (target === "" || indexOfProfile(list, target) >= 0) return list
+  if (list.length >= MAX_PROFILES) return list
+  list.push({ name: profileName(name, target), dir: target })
+  return list
+}
+
+// The last profile stays: an empty list would quietly fall back to profilePath.
+export function removeProfile(profiles, index) {
+  const list = (profiles || []).slice()
+  if (list.length <= 1 || index < 0 || index >= list.length) return list
+  list.splice(index, 1)
+  return list
+}
+
+export function renameProfile(profiles, index, name) {
+  const list = (profiles || []).slice()
+  if (index < 0 || index >= list.length) return list
+  list[index] = { name: profileName(name, list[index].dir), dir: list[index].dir }
+  return list
+}
+
+export function moveProfile(profiles, index, delta) {
+  const list = (profiles || []).slice()
+  const target = index + delta
+  if (index < 0 || index >= list.length || target < 0 || target >= list.length) return list
+  const moved = list.splice(index, 1)[0]
+  list.splice(target, 0, moved)
+  return list
+}
+
+// Paths under the home directory are written back as ~/…, so shell.json stays
+// readable and portable between machines with different user names.
+export function contractHome(dir, home) {
+  const base = stripTrailingSlash(home)
+  const path = stripTrailingSlash(dir)
+  if (base === "" || base === "/") return path
+  if (path === base) return "~"
+  return path.indexOf(base + "/") === 0 ? "~" + path.slice(base.length) : path
+}
+
+// The `profiles` value to save. The default profile is written without a path,
+// as a hand-written entry for it would be.
+export function profileEntries(profiles, home) {
+  const root = profileDirectory(home, "")
+  return (profiles || []).map(function(profile) {
+    return profile.dir === root
+      ? { name: profile.name }
+      : { name: profile.name, path: contractHome(profile.dir, home) }
+  })
+}
+
+// --- discovering profiles ---------------------------------------------------
+//
+// The settings view lists the Joplin profiles on this machine, and what each
+// one syncs to, so adding one is a click rather than a typed path. A profile is
+// a directory holding database.sqlite: the default instance, each secondary
+// instance beside it, and the profile-<id> directories File > Switch profile
+// creates inside an instance, named in that instance's profiles.json. The
+// configured directories are passed too, so a --profile directory elsewhere
+// still shows its account, or that its database is missing.
+//
+// One fixed script; the home directory and the configured directories arrive as
+// arguments and are never interpolated into it. Each file is read through
+// head -c, so the output is bounded by the number of directories.
+const DISCOVERY_READ_BYTES = 65536
+const RECORD = "\x1e"
+const FIELD = "\x1f"
+
+export const DISCOVERY_SCRIPT = [
+  'home=$1; shift',
+  'emit() {',
+  '  if [ -f "$1/database.sqlite" ]; then db=1; else db=0; fi',
+  '  printf \'\\036D\\037%s\\037%s\\037\' "$1" "$db"',
+  '  [ "$db" = 1 ] && head -c ' + DISCOVERY_READ_BYTES + ' "$1/settings.json" 2>/dev/null',
+  '  return 0',
+  '}',
+  'for root in "$home/.config/joplin-desktop" "$home"/.config/joplin-desktop-*; do',
+  '  [ -d "$root" ] || continue',
+  '  [ -f "$root/database.sqlite" ] && emit "$root"',
+  '  if [ -f "$root/profiles.json" ]; then',
+  '    printf \'\\036P\\037%s\\037\\037\' "$root"',
+  '    head -c ' + DISCOVERY_READ_BYTES + ' "$root/profiles.json" 2>/dev/null',
+  '  fi',
+  '  for sub in "$root"/profile-*; do',
+  '    [ -f "$sub/database.sqlite" ] && emit "$sub"',
+  '  done',
+  'done',
+  'for dir in "$@"; do emit "$dir"; done',
+  'exit 0'
+].join("\n")
+
+export function discoveryArgv(home, dirs) {
+  return ["sh", "-c", DISCOVERY_SCRIPT, "omajop-discover", String(home || "")]
+    .concat((dirs || []).map(String))
+}
+
+// Joplin's sync target ids, from each SyncTarget*.ts. Only these are named; any
+// other id is shown as its number rather than guessed at.
+export const SYNC_TARGET_LABELS = {
+  2: "File system",
+  3: "OneDrive",
+  5: "Nextcloud",
+  6: "WebDAV",
+  7: "Dropbox",
+  8: "S3",
+  9: "Joplin Server",
+  10: "Joplin Cloud",
+  11: "Joplin Server (SAML)"
+}
+
+// Targets whose sync.<id>.path is worth showing. Joplin Cloud's is its API
+// endpoint, the same for everyone.
+const SYNC_PATH_TARGETS = [2, 5, 6, 8, 9, 11]
+
+function hostOf(url) {
+  const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(String(url || ""))
+  return match ? match[1].replace(/^[^@]*@/, "") : String(url || "")
+}
+
+// What a profile syncs to, from its settings.json. Only the target, its
+// location, and the username are read: the file also holds the clipper's API
+// token, and nothing else from it may reach the panel.
+export function accountSummary(settings) {
+  const values = settings && typeof settings === "object" ? settings : {}
+  const target = Math.round(Number(values["sync.target"]) || 0)
+  if (target <= 0) return { target: 0, label: "Not syncing", location: "", user: "" }
+
+  const label = SYNC_TARGET_LABELS[target] || ("Sync target " + target)
+  const path = SYNC_PATH_TARGETS.indexOf(target) >= 0
+    ? plainLine(values["sync." + target + ".path"]) : ""
+  return {
+    target: target,
+    label: label,
+    location: truncate(target === 2 ? path : hostOf(path), 120),
+    user: truncate(plainLine(values["sync." + target + ".username"]), 120)
+  }
+}
+
+export function accountLine(account) {
+  if (!account) return ""
+  const parts = [account.label]
+  if (account.location) parts.push(account.location)
+  if (account.user) parts.push(account.user)
+  return parts.join("  ·  ")
+}
+
+function parseJsonObject(text) {
+  try {
+    const value = JSON.parse(String(text || ""))
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null
+  } catch (error) {
+    return null
+  }
+}
+
+// Returns {found, info}: every profile directory holding a database, in the
+// order the script met them, and per directory whether it has a database, its
+// account, and the name Joplin gives an in-app profile.
+export function parseDiscovery(text, home) {
+  const info = {}
+  const order = []
+  const appNames = {}
+
+  const records = String(text || "").split(RECORD)
+  for (const record of records) {
+    const fields = record.split(FIELD)
+    if (fields.length < 4) continue
+    const type = fields[0]
+    const dir = stripTrailingSlash(fields[1])
+    const body = fields.slice(3).join(FIELD)
+    if (dir === "") continue
+
+    if (type === "P") {
+      // profiles.json: {profiles: [{id, name}]}; "default" is the instance itself.
+      const config = parseJsonObject(body)
+      const list = config && Array.isArray(config.profiles) ? config.profiles : []
+      for (const profile of list) {
+        if (!profile || typeof profile !== "object") continue
+        const id = String(profile.id || "")
+        const name = truncate(plainLine(profile.name), MAX_PROFILE_NAME_CHARS)
+        if (name === "") continue
+        if (id === "default") appNames[dir] = name
+        else if (/^[A-Za-z0-9_-]+$/.test(id)) appNames[dir + "/profile-" + id] = name
+      }
+      continue
+    }
+    if (type !== "D" || info[dir]) continue
+
+    const hasDatabase = fields[2] === "1"
+    info[dir] = {
+      dir: dir,
+      kind: profileKind(home, dir),
+      hasDatabase: hasDatabase,
+      account: accountSummary(hasDatabase ? parseJsonObject(body) : null),
+      joplinName: ""
+    }
+    order.push(dir)
+  }
+
+  const found = []
+  for (const dir of order) {
+    if (appNames[dir]) info[dir].joplinName = appNames[dir]
+    if (info[dir].hasDatabase) found.push(info[dir])
+  }
+  return { found: found, info: info }
+}
+
+// A starting name for a profile added from the found list: the one Joplin
+// shows for an in-app profile, else the server it syncs to, else its folder.
+export function suggestedProfileName(found) {
+  if (!found) return ""
+  if (found.kind === PROFILE_IN_APP && found.joplinName) return found.joplinName
+  const location = found.account ? found.account.location : ""
+  if (location && found.account.target !== 2) return location.replace(/^(notes|www)\./i, "")
+  return baseName(found.dir)
 }
 
 // --- sqlite3 invocation -----------------------------------------------------

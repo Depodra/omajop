@@ -62,8 +62,8 @@ test("an empty joplinCommand default means joplin-desktop", () => {
 
 test("profiles stays out of the manifest", () => {
   // The settings form has no field type for a list of objects, so the list is
-  // set as text with `omarchy bar set` or in shell.json, and normalizeProfiles
-  // owns its default.
+  // edited in the panel's own profile settings, and normalizeProfiles owns its
+  // default.
   assert.ok(!widget.schema.some(entry => entry.key === "profiles"))
   assert.ok(!("profiles" in widget.defaults))
 })

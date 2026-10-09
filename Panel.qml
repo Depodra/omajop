@@ -51,6 +51,8 @@ Panel {
   property string query: ""
   // 0 = folders, 1 = notes. Left/right moves between them.
   property int activePane: 1
+  // The profile settings replace the panes while open.
+  property bool settingsOpen: false
 
   // bar.foreground, not bar.barForeground: the latter adapts to the wallpaper
   // behind the bar when the bar is transparent, which is right for something
@@ -199,6 +201,23 @@ Panel {
     if (hostWidget) hostWidget.selectProfile(index)
   }
 
+  function openSettings() {
+    settingsOpen = true
+    profileSettings.cursor = hostWidget ? hostWidget.profileIndex : 0
+    if (hostWidget) hostWidget.discoverProfiles()
+  }
+
+  function closeSettings() {
+    profileSettings.renaming = -1
+    settingsOpen = false
+    keyCatcher.forceActiveFocus()
+  }
+
+  function toggleSettings() {
+    if (settingsOpen) closeSettings()
+    else openSettings()
+  }
+
   function cycleProfile(delta) {
     if (hostWidget) hostWidget.cycleProfile(delta)
   }
@@ -257,6 +276,7 @@ Panel {
     // step and tells the host to drop its body matches.
     searchField.text = ""
     activePane = 1
+    settingsOpen = false
     reconcileSelection()
   }
 
@@ -274,11 +294,23 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
+        if (root.settingsOpen) {
+          if (dy !== 0) profileSettings.moveCursor(dy)
+          return
+        }
         if (dx !== 0) root.movePane(dx)
         if (dy !== 0) root.moveSelection(dy)
       }
-      onActivateRequested: root.openSelected()
-      onCloseRequested: root.close()
+      onActivateRequested: {
+        if (root.settingsOpen) profileSettings.activate()
+        else root.openSelected()
+      }
+      // Escape leaves the settings before it closes the panel.
+      onCloseRequested: {
+        if (root.settingsOpen) root.closeSettings()
+        else root.close()
+      }
+      onDeleteRequested: if (root.settingsOpen) profileSettings.removeAtCursor()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       // hjkl needs no handling here: PanelKeyCatcher already maps it onto
       // moveRequested, and accepts those keys before textKey is emitted.
@@ -289,6 +321,10 @@ Panel {
         else if (text === "G") root.scrollPreviewToEnd(true)
         else if (text === "q") root.close()
         else if (text === "r" || text === "R") root.refreshNow()
+        else if (text === "s" || text === ",") root.toggleSettings()
+        else if (root.settingsOpen && text === "J") profileSettings.moveAtCursor(1)
+        else if (root.settingsOpen && text === "K") profileSettings.moveAtCursor(-1)
+        else if (root.settingsOpen) return
         else if (text === "/") searchField.forceActiveFocus()
         else if (text === "p") root.cycleProfile(1)
         else if (text === "P") root.cycleProfile(-1)
@@ -375,6 +411,7 @@ Panel {
           anchors.leftMargin: Style.space(8)
           anchors.verticalCenter: parent.verticalCenter
           text: {
+            if (root.settingsOpen) return "Profiles"
             if (root.hostState === "checking") return "Loading…"
             if (root.hostState === "no-sqlite") return "sqlite3 missing"
             if (root.hostState === "no-database") return "No profile"
@@ -391,11 +428,11 @@ Panel {
 
         TextField {
           id: searchField
-          anchors.right: refreshButton.left
+          anchors.right: settingsButton.left
           anchors.rightMargin: Style.space(8)
           anchors.verticalCenter: parent.verticalCenter
           width: Style.space(150)
-          visible: root.hostState === "ready"
+          visible: root.hostState === "ready" && !root.settingsOpen
           foreground: root.contentForeground
           // Sized to sit inside the caption-height header rather than set it.
           font.family: root.contentFontFamily
@@ -413,6 +450,18 @@ Panel {
             text = ""
             keyCatcher.forceActiveFocus()
           }
+        }
+
+        PanelActionButton {
+          id: settingsButton
+          anchors.right: refreshButton.left
+          anchors.rightMargin: Style.space(4)
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: root.settingsOpen ? "\uf00d" : "\uf013"
+          tooltipText: root.settingsOpen ? "Back to notes  ·  s" : "Profiles  ·  s"
+          foreground: root.contentForeground
+          fontFamily: root.contentFontFamily
+          onClicked: root.toggleSettings()
         }
 
         PanelActionButton {
@@ -520,7 +569,7 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        visible: root.hostState === "ready"
+        visible: root.hostState === "ready" && !root.settingsOpen
 
         readonly property int folderWidth: Style.space(190)
         readonly property int noteWidth: Style.space(250)
@@ -1003,13 +1052,34 @@ Panel {
         }
       }
 
+      // --- settings ---------------------------------------------------------
+      // Reachable whatever state the profile is in, so a wrong path can be
+      // fixed from here.
+
+      ProfileSettings {
+        id: profileSettings
+        anchors.top: notices.bottom
+        anchors.topMargin: Style.space(10)
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        visible: root.settingsOpen
+        hostWidget: root.hostWidget
+        keyTarget: keyCatcher
+        contentForeground: root.contentForeground
+        mutedForeground: root.mutedForeground
+        contentFontFamily: root.contentFontFamily
+        // A new or moved entry may need its account read.
+        onProfilesChanged: if (root.settingsOpen && root.hostWidget) root.hostWidget.discoverProfiles()
+      }
+
       // --- empty states -----------------------------------------------------
 
       Column {
         anchors.centerIn: parent
         width: Math.min(parent.width, Style.space(420))
         spacing: Style.space(8)
-        visible: root.hostState !== "ready"
+        visible: root.hostState !== "ready" && !root.settingsOpen
 
         Text {
           width: parent.width
