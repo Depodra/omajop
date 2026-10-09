@@ -29,6 +29,8 @@ test("the manifest's defaults survive the model's own clamping", () => {
     widget.defaults.refreshSeconds)
   assert.equal(Model.normalizeProfilePath(widget.defaults.profilePath),
     widget.defaults.profilePath)
+  assert.equal(Model.normalizeJoplinCommand(widget.defaults.joplinCommand),
+    widget.defaults.joplinCommand)
 })
 
 test("the sortBy options are exactly what the model accepts", () => {
@@ -52,4 +54,16 @@ test("the refreshSeconds bounds match the model's clamp", () => {
 test("an empty profilePath default means the standard Joplin profile", () => {
   assert.equal(Model.databasePath("/home/x", widget.defaults.profilePath),
     "/home/x/.config/joplin-desktop/database.sqlite")
+})
+
+test("an empty joplinCommand default means joplin-desktop", () => {
+  assert.equal(Model.joplinExecutable(widget.defaults.joplinCommand), "joplin-desktop")
+})
+
+test("profiles stays out of the manifest", () => {
+  // The settings form has no field type for a list of objects, so the list is
+  // set as text with `omarchy bar set` or in shell.json, and normalizeProfiles
+  // owns its default.
+  assert.ok(!widget.schema.some(entry => entry.key === "profiles"))
+  assert.ok(!("profiles" in widget.defaults))
 })

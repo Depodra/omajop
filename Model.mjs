@@ -109,6 +109,11 @@ export function normalizeProfilePath(value) {
   return String(value === undefined || value === null ? "" : value).trim()
 }
 
+// Empty means joplin-desktop; see joplinExecutable.
+export function normalizeJoplinCommand(value) {
+  return String(value === undefined || value === null ? "" : value).trim()
+}
+
 // --- paths ------------------------------------------------------------------
 
 function expandHome(path, home) {
@@ -135,6 +140,118 @@ export function profileDirectory(home, profilePath) {
 
 export function databasePath(home, profilePath) {
   return profileDirectory(home, profilePath) + "/" + DB_FILENAME
+}
+
+// --- profiles ---------------------------------------------------------------
+//
+// A Joplin profile syncs to exactly one target, so notes from a work server and
+// a personal one live in two profiles: typically the main instance plus a
+// secondary one (File > Open secondary app instance, kept in
+// ~/.config/joplin-desktop-alt1), or a directory started with --profile.
+// `profiles` lists them; without it, profilePath names the only one, exactly
+// as before.
+
+// The digit keys select a profile, so there is no point listing more.
+export const MAX_PROFILES = 9
+const MAX_PROFILE_NAME_CHARS = 40
+
+export const DEFAULT_JOPLIN_COMMAND = "joplin-desktop"
+
+function baseName(path) {
+  const text = stripTrailingSlash(path)
+  return text.slice(text.lastIndexOf("/") + 1)
+}
+
+function profileName(name, dir) {
+  const given = truncate(plainLine(name), MAX_PROFILE_NAME_CHARS)
+  return given !== "" ? given : baseName(dir)
+}
+
+// Entries are {name, path} objects or bare path strings. A missing path means
+// the default profile, as an empty profilePath does. shell.json is hand-edited,
+// so anything else is dropped rather than trusted, and two entries for one
+// directory are one profile.
+export function normalizeProfiles(value, profilePath, home) {
+  let entries = value
+  // `omarchy bar set … profiles '[…]'` without --json stores the JSON as text.
+  if (typeof entries === "string") {
+    try {
+      entries = JSON.parse(entries)
+    } catch (error) {
+      entries = null
+    }
+  }
+
+  const profiles = []
+  const seen = {}
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      if (profiles.length >= MAX_PROFILES) break
+      const raw = typeof entry === "string" ? { path: entry } : entry
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue
+      const dir = profileDirectory(home, raw.path)
+      if (seen[dir]) continue
+      seen[dir] = true
+      profiles.push({ name: profileName(raw.name, dir), dir: dir })
+    }
+  }
+  if (profiles.length > 0) return profiles
+
+  const dir = profileDirectory(home, profilePath)
+  return [{ name: profileName("", dir), dir: dir }]
+}
+
+export function clampProfileIndex(index, count) {
+  const value = Math.round(Number(index))
+  if (!isFinite(value) || count <= 0) return 0
+  return Math.min(count - 1, Math.max(0, value))
+}
+
+export function joplinExecutable(command) {
+  const value = normalizeJoplinCommand(command)
+  return value !== "" ? value : DEFAULT_JOPLIN_COMMAND
+}
+
+// "Open in Joplin" has to reach the instance that owns the profile: xdg-open
+// always starts the default instance, which would look the note up in the wrong
+// database. A joplin-desktop started with the same profile flags hands its argv
+// to the instance already running on that profile and exits, or becomes that
+// instance if none is. Joplin matches the two by comparing profile paths as
+// plain strings, so the directory is passed exactly as normalised here.
+//
+// Returns the argv to run, minus the note URL, or an empty argv and the reason
+// the note cannot be opened from here.
+export function openTarget(home, profileDir, joplinCommand) {
+  const dir = stripTrailingSlash(profileDir)
+  const root = profileDirectory(home, "")
+  if (dir === root) return { argv: ["xdg-open"], reason: "" }
+
+  // Joplin derives a secondary instance's directory from its id the same way.
+  const altId = dir.indexOf(root + "-") === 0 ? dir.slice(root.length + 1) : ""
+  const command = joplinExecutable(joplinCommand)
+  if (/^[A-Za-z0-9_-]+$/.test(altId)) {
+    return { argv: [command, "--alt-instance-id", altId], reason: "" }
+  }
+
+  // A profile created with File > Switch profile lives in profile-<id> inside
+  // its instance's directory, and only the instance's active profile can be
+  // addressed from outside the app.
+  if (/^profile-[A-Za-z0-9_-]+$/.test(baseName(dir))) {
+    return {
+      argv: [],
+      reason: "Joplin can only open this profile's notes while it is the active "
+        + "profile. Switch to it in Joplin with File > Switch profile."
+    }
+  }
+
+  return { argv: [command, "--profile", dir], reason: "" }
+}
+
+export function openArgv(home, profileDir, noteId, joplinCommand) {
+  const url = noteUrl(noteId)
+  const target = openTarget(home, profileDir, joplinCommand)
+  if (url === "" || target.argv.length === 0) return []
+  return target.argv.concat([url])
 }
 
 // --- sqlite3 invocation -----------------------------------------------------

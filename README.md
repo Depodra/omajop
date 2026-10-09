@@ -42,6 +42,8 @@ To hack on it instead of just running it, see [Development](#development).
 | `g` `G` | Jump the preview to the top / bottom |
 | `Enter` | Open the selected note in Joplin |
 | `/` | Focus the search box |
+| `p` `P` | Next / previous profile, when there are [several](#multiple-profiles) |
+| `1`–`9` | Jump to that profile |
 | `r` | Refresh |
 | `Esc` or `q` | Close |
 
@@ -66,6 +68,8 @@ below are what it uses when `shell.json` says nothing about it.
 | Key | Default | Change it when |
 |---|---|---|
 | `profilePath` | `~/.config/joplin-desktop` | Your profile is elsewhere — a portable profile, or a second Joplin started with `--profile` |
+| `profiles` | — | You browse more than one profile; see [Multiple profiles](#multiple-profiles). Replaces `profilePath` |
+| `joplinCommand` | `joplin-desktop` | Joplin is not on `PATH` under that name — an AppImage, say. Only used to open notes from a profile other than the default one |
 | `sortBy` | `updated` | You would rather browse alphabetically: `title` |
 | `refreshSeconds` | `60` | You want outside edits noticed sooner, or less polling on battery. 5–3600 |
 
@@ -80,6 +84,53 @@ value is clamped in `Model.mjs` on the way in, because `shell.json` is
 hand-editable and the manifest schema is only a hint — a test holds the
 manifest's defaults and the model's clamps to each other, so they cannot
 drift apart.
+
+### Multiple profiles
+
+A Joplin profile syncs to exactly one target. Notes from a work server and a
+personal one therefore live in two profiles, and the usual way to have both
+open is a second instance of the app: **File → Open secondary app instance…**
+starts one with its own profile in `~/.config/joplin-desktop-alt1`.
+
+List the profiles to browse, and the panel header turns into a switcher:
+
+```bash
+omarchy bar set io.github.renerocksai.omajop profiles \
+  '[{"name": "Work"}, {"name": "Personal", "path": "~/.config/joplin-desktop-alt1"}]'
+```
+
+Without `--json` the list is stored as text, which omajop parses. With it, the
+shell's IPC splits the array at its commas before the setting is written.
+
+Each entry is a `name` and a `path`. A missing `path` means the default
+profile, and a bare string is a path with no name, so the directory's name is
+shown instead. Up to nine are listed — one per digit key. The first is the one
+the panel opens on. `profiles` is not in the manifest's schema, because the
+settings form has no field for a list; set it as above, or as a real array in
+`shell.json`.
+
+**Open in Joplin** has to reach the instance that owns the note, not just any
+Joplin: `xdg-open` on a `joplin://` link always lands in the default instance,
+which would look the note up in the wrong database. So omajop starts
+`joplin-desktop` with the same flags as the instance it is after. Joplin passes
+the link on to the instance already running on that profile and exits, or
+becomes that instance if none is:
+
+| Profile directory | Opened with |
+|---|---|
+| `~/.config/joplin-desktop` | `xdg-open joplin://…`, as before |
+| `~/.config/joplin-desktop-<id>` | `joplin-desktop --alt-instance-id <id> joplin://…` |
+| anything else | `joplin-desktop --profile <dir> joplin://…` |
+
+Joplin recognises its own instance by comparing profile paths as plain
+strings, so for a `--profile` directory give the same path you start Joplin
+with. omajop expands `~` and drops a trailing slash.
+
+A profile made with **File → Switch profile** is the exception. It lives in a
+`profile-<id>` directory inside its instance's, and only an instance's
+*active* profile can be addressed from outside the app. Its notes can be
+browsed, but the open button is disabled and a notice above the panes says
+why.
 
 ## IPC
 
@@ -109,6 +160,8 @@ database `-readonly` and has no code path that writes.
 Editing is therefore delegated: **Open in Joplin** (`Enter`, or the button above
 the preview) hands the note to the desktop app over its registered
 `joplin://x-callback-url/openNote` URL scheme, starting it if it is not running.
+A note from another profile goes to that profile's instance instead; see
+[Multiple profiles](#multiple-profiles).
 
 ### Images
 

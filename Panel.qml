@@ -25,6 +25,11 @@ Panel {
   readonly property string databasePath: hostWidget ? hostWidget.databasePath : ""
   // Bounds which file:// links in a note body may be opened.
   readonly property string profileDir: hostWidget ? hostWidget.profileDir : ""
+  readonly property var profiles: hostWidget && hostWidget.profiles ? hostWidget.profiles : []
+  readonly property int profileIndex: hostWidget ? hostWidget.profileIndex : 0
+  readonly property bool multipleProfiles: profiles.length > 1
+  readonly property string profileName: hostWidget ? hostWidget.profileName : ""
+  readonly property string openBlockedReason: hostWidget ? hostWidget.openBlockedReason : ""
   property date now: hostWidget ? hostWidget.now : new Date()
 
   readonly property string bodyText: hostWidget ? hostWidget.bodyText : ""
@@ -184,8 +189,18 @@ Panel {
 
   function openSelected() {
     if (!hostWidget || selectedNoteId === "") return
+    // A notice above the panes says why; closing would hide it.
+    if (openBlockedReason !== "") return
     hostWidget.openInJoplin(selectedNoteId)
     root.close()
+  }
+
+  function selectProfile(index) {
+    if (hostWidget) hostWidget.selectProfile(index)
+  }
+
+  function cycleProfile(delta) {
+    if (hostWidget) hostWidget.cycleProfile(delta)
   }
 
   function refreshNow() {
@@ -229,6 +244,14 @@ Panel {
 
   onVisibleNotesChanged: Qt.callLater(root.reconcileSelection)
 
+  // A folder, tag, or search from one profile means nothing in another.
+  onProfileDirChanged: {
+    selectedKind = Model.SOURCE_ALL
+    selectedId = ""
+    searchField.text = ""
+    selectNote("")
+  }
+
   onOpenedChanged: if (opened) {
     // Clear the field, not `query`: its onTextChanged is what keeps the two in
     // step and tells the host to drop its body matches.
@@ -267,6 +290,9 @@ Panel {
         else if (text === "q") root.close()
         else if (text === "r" || text === "R") root.refreshNow()
         else if (text === "/") searchField.forceActiveFocus()
+        else if (text === "p") root.cycleProfile(1)
+        else if (text === "P") root.cycleProfile(-1)
+        else if (text >= "1" && text <= "9") root.selectProfile(Number(text) - 1)
       }
 
       // --- header -----------------------------------------------------------
@@ -282,6 +308,7 @@ Panel {
           id: headingLabel
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
+          visible: !root.multipleProfiles
           text: "JOPLIN"
           color: root.mutedForeground
           font.family: root.contentFontFamily
@@ -290,9 +317,61 @@ Panel {
           font.bold: true
         }
 
+        // With several profiles, their names replace the heading and switch
+        // between them: click, p / P, or the profile's digit.
+        Row {
+          id: profileTabs
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(10)
+          visible: root.multipleProfiles
+
+          Repeater {
+            model: root.profiles
+
+            delegate: Text {
+              id: profileTab
+              required property var modelData
+              required property int index
+
+              readonly property bool current: profileTab.index === root.profileIndex
+
+              width: Math.min(implicitWidth, Style.space(120))
+              text: String(profileTab.modelData.name).toUpperCase()
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              color: profileTab.current || profileMouse.containsMouse
+                ? root.contentForeground : root.mutedForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1.2
+              font.bold: true
+
+              Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.bottom
+                anchors.topMargin: Style.space(2)
+                height: 2
+                radius: 1
+                visible: profileTab.current
+                color: Color.accent
+              }
+
+              MouseArea {
+                id: profileMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.selectProfile(profileTab.index)
+              }
+            }
+          }
+        }
+
         Text {
           id: countLabel
-          anchors.left: headingLabel.right
+          anchors.left: root.multipleProfiles ? profileTabs.right : headingLabel.right
           anchors.leftMargin: Style.space(8)
           anchors.verticalCenter: parent.verticalCenter
           text: {
@@ -379,6 +458,7 @@ Panel {
         spacing: Style.space(6)
 
         readonly property bool visibleNotice: problemText !== "" || root.schemaNotice !== ""
+          || openNotice.visible
         readonly property string problemText: {
           if (root.hostState === "no-sqlite" || root.hostState === "no-database") return root.loadError
           return root.loadError
@@ -405,6 +485,18 @@ Panel {
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
           }
+        }
+
+        Text {
+          id: openNotice
+          width: parent.width
+          visible: root.hostState === "ready" && root.openBlockedReason !== ""
+          text: root.openBlockedReason
+          textFormat: Text.PlainText
+          color: root.mutedForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
 
         Text {
@@ -731,6 +823,9 @@ Panel {
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             visible: root.selectedNote !== null
+            // A disabled button shows no tooltip, so the reason is a notice.
+            enabled: root.openBlockedReason === ""
+            opacity: enabled ? 1.0 : 0.6
             onClicked: root.openSelected()
           }
 
@@ -922,7 +1017,9 @@ Panel {
           text: {
             if (root.hostState === "checking") return "Looking for sqlite3…"
             if (root.hostState === "no-sqlite") return "sqlite3 is required"
-            return "No Joplin profile found"
+            return root.multipleProfiles
+              ? "No Joplin profile found for " + Model.plainLine(root.profileName)
+              : "No Joplin profile found"
           }
           color: root.contentForeground
           font.family: root.contentFontFamily

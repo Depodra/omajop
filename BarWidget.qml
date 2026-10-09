@@ -21,9 +21,30 @@ BarWidget {
   readonly property string profilePath: Model.normalizeProfilePath(setting("profilePath", null))
   readonly property string sortBy: Model.normalizeSortBy(setting("sortBy", null))
   readonly property int refreshSeconds: Model.normalizeRefreshSeconds(setting("refreshSeconds", null))
+  readonly property string joplinCommand: Model.normalizeJoplinCommand(setting("joplinCommand", null))
 
-  readonly property string profileDir: Model.profileDirectory(Quickshell.env("HOME"), profilePath)
-  readonly property string databasePath: Model.databasePath(Quickshell.env("HOME"), profilePath)
+  // [{name, dir}]. Without a `profiles` setting this is profilePath alone.
+  readonly property var profiles: Model.normalizeProfiles(
+    setting("profiles", null), profilePath, Quickshell.env("HOME"))
+  readonly property bool multipleProfiles: profiles.length > 1
+  // Which profile is browsed. Not persisted: the first one is the default.
+  property int activeProfileIndex: 0
+  readonly property int profileIndex: Model.clampProfileIndex(activeProfileIndex, profiles.length)
+  readonly property string profileName: profiles[profileIndex].name
+
+  readonly property string profileDir: profiles[profileIndex].dir
+  readonly property string databasePath: Model.databasePath(Quickshell.env("HOME"), profileDir)
+  // Why "Open in Joplin" cannot reach this profile, or "" when it can.
+  readonly property string openBlockedReason:
+    Model.openTarget(Quickshell.env("HOME"), profileDir, joplinCommand).reason
+
+  // The database the running load pass, body read, and search were started
+  // against. Each step reads these rather than databasePath, so a profile
+  // switch mid-pass cannot mix two databases; a stale pass is dropped when it
+  // lands and a fresh one started.
+  property string passDatabasePath: ""
+  property string bodyDatabasePath: ""
+  property string searchDatabasePath: ""
 
   // "checking" | "no-sqlite" | "no-database" | "ready"
   property string dbState: "checking"
@@ -74,6 +95,7 @@ BarWidget {
     if (loading) return
     // A fresh pass starts without the previous one's timeout.
     queryTimedOut = false
+    passDatabasePath = databasePath
     if (dbState === "ready") {
       loadSchema()
       return
@@ -81,7 +103,17 @@ BarWidget {
     sqliteCheckProcess.running = true
   }
 
+  // A pass that began on another profile is abandoned at its next step, and a
+  // pass for the current one started in its place.
+  function abandonStalePass() {
+    if (passDatabasePath === databasePath) return false
+    queryTimedOut = false
+    Qt.callLater(root.refresh)
+    return true
+  }
+
   function finishSqliteCheck(exitCode) {
+    if (abandonStalePass()) return
     if (exitCode !== 0 || String(sqliteCheckStdout.text || "").trim() === "") {
       dbState = "no-sqlite"
       loadError = "sqlite3 was not found on PATH."
@@ -92,15 +124,16 @@ BarWidget {
   }
 
   function loadSchema() {
-    schemaProcess.command = Model.sqliteArgv(databasePath, Model.schemaSql())
+    schemaProcess.command = Model.sqliteArgv(passDatabasePath, Model.schemaSql())
     schemaProcess.running = true
   }
 
   function finishSchema(exitCode) {
+    if (abandonStalePass()) return
     if (exitCode !== 0) {
       // The most common cause by far is that Joplin has never run here.
       dbState = "no-database"
-      loadError = "No Joplin database at " + databasePath
+      loadError = "No Joplin database at " + passDatabasePath
       schemaNotice = ""
       setData([], [])
       return
@@ -112,29 +145,32 @@ BarWidget {
     } catch (error) {
       // The schema probe is advisory; a failure here must not block the notes.
     }
-    foldersProcess.command = Model.sqliteArgv(databasePath, Model.foldersSql())
+    foldersProcess.command = Model.sqliteArgv(passDatabasePath, Model.foldersSql())
     foldersProcess.running = true
   }
 
   function finishFolders(exitCode) {
+    if (abandonStalePass()) return
     if (exitCode !== 0) {
       failLoad(String(foldersStderr.text || "").trim(), "Could not read folders.")
       return
     }
-    notesProcess.command = Model.sqliteArgv(databasePath, Model.notesSql(sortBy))
+    notesProcess.command = Model.sqliteArgv(passDatabasePath, Model.notesSql(sortBy))
     notesProcess.running = true
   }
 
   function finishNotes(exitCode) {
+    if (abandonStalePass()) return
     if (exitCode !== 0) {
       failLoad(String(notesStderr.text || "").trim(), "Could not read notes.")
       return
     }
-    resourcesProcess.command = Model.sqliteArgv(databasePath, Model.resourcesSql())
+    resourcesProcess.command = Model.sqliteArgv(passDatabasePath, Model.resourcesSql())
     resourcesProcess.running = true
   }
 
   function finishResources(exitCode) {
+    if (abandonStalePass()) return
     // Attachments are decorative: a failure here must not cost the notes.
     resourceMap = ({})
     if (exitCode === 0) {
@@ -144,11 +180,12 @@ BarWidget {
         // Leave the map empty; bodies still render, without their images.
       }
     }
-    tagsProcess.command = Model.sqliteArgv(databasePath, Model.tagsSql())
+    tagsProcess.command = Model.sqliteArgv(passDatabasePath, Model.tagsSql())
     tagsProcess.running = true
   }
 
   function finishTags(exitCode) {
+    if (abandonStalePass()) return
     try {
       var folders = Model.parseRows(foldersStdout.text || "")
       var notes = Model.parseRows(notesStdout.text || "")
@@ -217,7 +254,8 @@ BarWidget {
       bodyError = "Refusing to load a note with a malformed id."
       return
     }
-    bodyProcess.command = Model.sqliteArgv(databasePath, sql)
+    bodyDatabasePath = databasePath
+    bodyProcess.command = Model.sqliteArgv(bodyDatabasePath, sql)
     bodyProcess.running = true
   }
 
@@ -226,6 +264,8 @@ BarWidget {
       startBodyRead()
       return
     }
+    // A read from the profile switched away from must not paint over this one.
+    if (bodyDatabasePath !== databasePath) return
     if (exitCode !== 0) {
       bodyError = Model.truncate(Model.plainLine(String(bodyStderr.text || "").trim()), 200)
         || "Could not read this note."
@@ -273,11 +313,14 @@ BarWidget {
       searchDebounce.restart()
       return
     }
-    searchProcess.command = Model.sqliteArgv(databasePath, Model.searchSql(expression))
+    searchDatabasePath = databasePath
+    searchProcess.command = Model.sqliteArgv(searchDatabasePath, Model.searchSql(expression))
     searchProcess.running = true
   }
 
   function finishSearch(exitCode) {
+    // Ids from another profile's index would match nothing here, or the wrong note.
+    if (searchDatabasePath !== databasePath) return
     // A profile whose schema predates notes_fts, or any other failure, simply
     // leaves the filter matching titles only.
     if (exitCode !== 0) {
@@ -291,11 +334,47 @@ BarWidget {
     }
   }
 
+  // The note goes to the Joplin instance that owns this profile; see
+  // Model.openTarget for how each kind of profile is reached.
   function openInJoplin(id) {
-    var url = Model.noteUrl(id)
-    if (url === "") return
-    Quickshell.execDetached(["xdg-open", url])
+    var argv = Model.openArgv(Quickshell.env("HOME"), profileDir, id, joplinCommand)
+    if (argv.length === 0) return
+    Quickshell.execDetached(argv)
   }
+
+  // --- profiles -------------------------------------------------------------
+
+  function selectProfile(index) {
+    activeProfileIndex = Model.clampProfileIndex(index, profiles.length)
+  }
+
+  function cycleProfile(delta) {
+    if (profiles.length < 2) return
+    selectProfile((profileIndex + delta + profiles.length) % profiles.length)
+  }
+
+  // Everything held here came from the previous profile's database. Also
+  // reached when a settings edit moves the browsed profile.
+  function resetForProfile() {
+    searchDebounce.stop()
+    bodyMatchIds = ({})
+    bodyReadPending = false
+    bodyNoteId = ""
+    bodyText = ""
+    bodyEncrypted = false
+    bodyTruncated = false
+    bodyError = ""
+    resourceMap = ({})
+    tagIndex = Model.emptyTagIndex()
+    schemaNotice = ""
+    loadError = ""
+    // "No database" described the old profile; "ready" and "no-sqlite" do not.
+    if (dbState === "no-database") dbState = "checking"
+    setData([], [])
+    Qt.callLater(root.refresh)
+  }
+
+  onProfileDirChanged: resetForProfile()
 
   // --- panel plumbing -------------------------------------------------------
   // Shape the bar host and popout coordinator expect from a widget with a panel.
@@ -328,7 +407,7 @@ BarWidget {
 
   onSettingsChanged: Qt.callLater(root.refresh)
 
-  readonly property string tooltipLine: {
+  readonly property string statusLine: {
     if (dbState === "checking") return "Looking for sqlite3…"
     if (dbState === "no-sqlite") return Model.plainLine(loadError)
     if (dbState === "no-database") return "No Joplin notes found\n" + Model.plainLine(databasePath)
@@ -336,6 +415,11 @@ BarWidget {
     if (noteCount === 0) return "No Joplin notes"
     return noteCount + (noteCount === 1 ? " note" : " notes") + " · click to browse"
   }
+
+  // With several profiles, say which one the counts belong to.
+  readonly property string tooltipLine: multipleProfiles
+    ? Model.plainLine(profileName) + " · " + statusLine
+    : statusLine
 
   SystemClock {
     id: clock
