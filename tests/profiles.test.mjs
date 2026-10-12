@@ -48,6 +48,14 @@ test("the profiles list may arrive as a JSON string", () => {
     [{ name: "Work", dir: ROOT }, { name: "p", dir: "/p" }])
 })
 
+test("the profiles list may arrive as a Qt sequence rather than an Array", () => {
+  // The bar passes shell.json entries through a Repeater, so a saved list
+  // reaches the widget as an indexable object with a length, after a restart.
+  const sequence = { 0: { name: "Work" }, 1: { path: "/p" }, 2: { 0: "/q", length: 1 }, length: 3 }
+  assert.deepEqual(Model.normalizeProfiles(sequence, "/ignored", HOME),
+    [{ name: "Work", dir: ROOT }, { name: "p", dir: "/p" }])
+})
+
 test("the profile count is capped at what the digit keys can reach", () => {
   const many = []
   for (let i = 0; i < 20; i++) many.push("/p" + i)

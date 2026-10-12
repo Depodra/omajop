@@ -167,6 +167,16 @@ function profileName(name, dir) {
   return given !== "" ? given : baseName(dir)
 }
 
+// The bar hands a widget its shell.json entry through a Repeater, which turns
+// a JSON array into a Qt sequence: indexable and with a length, but not an
+// Array. Either comes back as an Array; anything else as null.
+function listValue(value) {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === "object" && typeof value.length === "number")
+    return Array.prototype.slice.call(value)
+  return null
+}
+
 // Entries are {name, path} objects or bare path strings. A missing path means
 // the default profile, as an empty profilePath does. shell.json is hand-edited,
 // so anything else is dropped rather than trusted, and two entries for one
@@ -181,14 +191,15 @@ export function normalizeProfiles(value, profilePath, home) {
       entries = null
     }
   }
+  entries = listValue(entries)
 
   const profiles = []
   const seen = {}
-  if (Array.isArray(entries)) {
+  if (entries) {
     for (const entry of entries) {
       if (profiles.length >= MAX_PROFILES) break
       const raw = typeof entry === "string" ? { path: entry } : entry
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue
+      if (!raw || typeof raw !== "object" || listValue(raw)) continue
       const dir = profileDirectory(home, raw.path)
       if (seen[dir]) continue
       seen[dir] = true
