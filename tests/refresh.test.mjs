@@ -227,6 +227,42 @@ test("Joplin started from a profile's page skips the welcome notebook until it h
   ])
 })
 
+function accountWidget(stdout, profiles) {
+  const state = vm.createContext({
+    Model, joplinCommand: "", profiles, saved: [], launched: [], discoveries: 0,
+    pendingAccount: { name: "Room40", server: "https://notes.room40.com.au" },
+    accountFailed: false, accountMessage: "", createStdout: { text: stdout },
+    Quickshell: { env: () => "/home/x", execDetached(argv) { state.launched.push(argv) } },
+    saveProfiles(list) { state.saved.push(list) },
+    discoverProfiles() { state.discoveries++ },
+  })
+  vm.runInContext(qml.match(/  function finishCreateAccount\([^]*?\n  }/)[0], state)
+  return state
+}
+
+test("an account created in the main instance names it and starts it without welcome notes", () => {
+  // No list set, so the main instance is already listed as the default profile.
+  const state = accountWidget("/home/x/.config/joplin-desktop\n",
+    Model.normalizeProfiles(null, "", "/home/x"))
+  state.finishCreateAccount(0)
+  assert.deepEqual(JSON.parse(JSON.stringify(state.saved)),
+    [[{ name: "Room40", dir: "/home/x/.config/joplin-desktop" }]])
+  assert.deepEqual(JSON.parse(JSON.stringify(state.launched)), [["joplin-desktop", "--no-welcome"]])
+  assert.equal(state.accountFailed, false)
+  assert.match(state.accountMessage, /main Joplin/)
+})
+
+test("a create that reports no directory it was given is a failure", () => {
+  for (const [exitCode, stdout] of [[0, ""], [0, "/tmp/elsewhere\n"], [4, ""]]) {
+    const state = accountWidget(stdout, [{ name: "Work", dir: "/w" }])
+    state.finishCreateAccount(exitCode)
+    assert.deepEqual(state.saved, [])
+    assert.deepEqual(state.launched, [])
+    assert.equal(state.accountFailed, true)
+    assert.equal(state.discoveries, 1)
+  }
+})
+
 const settingsQml = readFileSync(new URL("../ProfileSettings.qml", import.meta.url), "utf8")
 
 test("leaving a profile's page with Back keeps a name that was typed", () => {

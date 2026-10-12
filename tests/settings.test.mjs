@@ -267,51 +267,96 @@ test("a new account's settings read back as that server and user", () => {
     ["$schema", "sync.9.path", "sync.9.username", "sync.target"])
 })
 
-test("the new account is Joplin's secondary instance, started without welcome notes", () => {
-  assert.equal(Model.newAccountDir(HOME), ROOT + "-alt1")
+test("a new account goes to the main Joplin first, then the secondary instance", () => {
+  const alt = ROOT + "-alt1"
+  assert.deepEqual(Model.accountDirs(HOME), [ROOT, alt])
+  assert.equal(Model.newAccountDir(HOME, {}), ROOT)
+  assert.equal(Model.newAccountDir(HOME, null), ROOT)
+  // Discovery reports a directory it was asked about even when it is missing.
+  assert.equal(Model.newAccountDir(HOME, { [ROOT]: { exists: false } }), ROOT)
+  assert.equal(Model.newAccountDir(HOME, { [ROOT]: { exists: true } }), alt)
+  assert.equal(Model.newAccountDir(HOME, { [ROOT]: { exists: true }, [alt]: { exists: true } }), "")
+  assert.equal(Model.newAccountDir(HOME, { [alt]: { exists: true } }), ROOT)
+})
+
+test("either one is started without welcome notes", () => {
+  assert.deepEqual(Model.firstLaunchArgv(HOME, ROOT, ""), ["joplin-desktop", "--no-welcome"])
   assert.deepEqual(Model.firstLaunchArgv(HOME, ROOT + "-alt1", ""),
     ["joplin-desktop", "--alt-instance-id", "alt1", "--no-welcome"])
   assert.deepEqual(Model.firstLaunchArgv(HOME, ROOT + "/profile-a1", ""), [])
+  assert.match(Model.accountInstanceLabel(HOME, ROOT), /main Joplin/)
+  assert.match(Model.accountInstanceLabel(HOME, ROOT + "-alt1"), /secondary/)
 })
 
-function runCreate(home, dir, joplin) {
+test("only a directory the script was given counts as created", () => {
+  const dirs = Model.accountDirs(HOME)
+  assert.equal(Model.createdAccountDir(ROOT + "\n", dirs), ROOT)
+  assert.equal(Model.createdAccountDir(dirs[1], dirs), dirs[1])
+  for (const output of ["", undefined, null, "/elsewhere\n", ROOT + "/x", ROOT + "\n" + ROOT])
+    assert.equal(Model.createdAccountDir(output, dirs), "")
+})
+
+test("an account in an already listed directory renames it rather than being dropped", () => {
+  // With no list set, the main instance is listed as the default profile.
+  const fallback = Model.normalizeProfiles(null, "", HOME)
+  assert.deepEqual(Model.withAccountProfile(fallback, ROOT, "Room40"),
+    [{ name: "Room40", dir: ROOT }])
+  assert.deepEqual(Model.withAccountProfile(fallback, ROOT + "-alt1", "Personal"),
+    [{ name: "joplin-desktop", dir: ROOT }, { name: "Personal", dir: ROOT + "-alt1" }])
+})
+
+function runCreate(home, joplin) {
   const json = Model.newAccountSettings("https://notes.example.com", "me@example.com")
-  const argv = Model.createAccountArgv(dir, json, joplin)
+  const argv = Model.createAccountArgv(Model.accountDirs(home), json, joplin)
   try {
-    execFileSync(argv[0], argv.slice(1), { stdio: "ignore" })
-    return 0
+    const output = execFileSync(argv[0], argv.slice(1), { encoding: "utf8" })
+    return { code: 0, dir: Model.createdAccountDir(output, Model.accountDirs(home)) }
   } catch (error) {
-    return error.status
+    return { code: error.status, dir: "" }
   }
 }
 
-test("the create script writes the instance's settings and nothing else", () => {
+test("the create script writes the main instance's settings and nothing else", () => {
   const home = mkdtempSync(join(tmpdir(), "omajop-create-"))
   try {
-    const dir = Model.newAccountDir(home)
+    const [root] = Model.accountDirs(home)
     // `true` stands in for joplin-desktop: it only has to be found.
-    assert.equal(runCreate(home, dir, "true"), 0)
-    assert.deepEqual(readdirSync(dir), ["settings.json"])
-    const written = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"))
+    assert.deepEqual(runCreate(home, "true"), { code: 0, dir: root })
+    assert.deepEqual(readdirSync(root), ["settings.json"])
+    const written = JSON.parse(readFileSync(join(root, "settings.json"), "utf8"))
     assert.equal(Model.accountSummary(written).location, "notes.example.com")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
 })
 
-test("the create script never touches an existing directory", () => {
+test("the create script goes on to alt1 and never touches an existing directory", () => {
   const home = mkdtempSync(join(tmpdir(), "omajop-create-"))
   try {
-    const dir = Model.newAccountDir(home)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, "settings.json"), "{\"sync.target\": 2}")
-    assert.equal(runCreate(home, dir, "true"), 4)
-    assert.equal(readFileSync(join(dir, "settings.json"), "utf8"), "{\"sync.target\": 2}")
-    // An empty directory is someone else's too.
-    const empty = join(home, "empty")
-    mkdirSync(empty)
-    assert.equal(runCreate(home, empty, "true"), 4)
-    assert.deepEqual(readdirSync(empty), [])
+    const [root, alt] = Model.accountDirs(home)
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, "settings.json"), "{\"sync.target\": 2}")
+    assert.deepEqual(runCreate(home, "true"), { code: 0, dir: alt })
+    assert.equal(readFileSync(join(root, "settings.json"), "utf8"), "{\"sync.target\": 2}")
+    assert.deepEqual(readdirSync(alt), ["settings.json"])
+    // With both taken, nothing is written anywhere.
+    const before = readFileSync(join(alt, "settings.json"), "utf8")
+    assert.deepEqual(runCreate(home, "true"), { code: 4, dir: "" })
+    assert.equal(readFileSync(join(alt, "settings.json"), "utf8"), before)
+    assert.deepEqual(readdirSync(join(home, ".config")).sort(), ["joplin-desktop", "joplin-desktop-alt1"])
+    assert.match(Model.createAccountError(4, "", home), /already exist/)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("an empty main directory is someone else's too", () => {
+  const home = mkdtempSync(join(tmpdir(), "omajop-create-"))
+  try {
+    const [root, alt] = Model.accountDirs(home)
+    mkdirSync(root, { recursive: true })
+    assert.deepEqual(runCreate(home, "true"), { code: 0, dir: alt })
+    assert.deepEqual(readdirSync(root), [])
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -320,18 +365,16 @@ test("the create script never touches an existing directory", () => {
 test("without Joplin the create script writes nothing", () => {
   const home = mkdtempSync(join(tmpdir(), "omajop-create-"))
   try {
-    const dir = Model.newAccountDir(home)
-    assert.equal(runCreate(home, dir, "omajop-no-such-joplin"), 3)
+    assert.deepEqual(runCreate(home, "omajop-no-such-joplin"), { code: 3, dir: "" })
     assert.deepEqual(readdirSync(home), [])
-    assert.match(Model.createAccountError(3, dir, "omajop-no-such-joplin", home), /not found/)
-    assert.match(Model.createAccountError(4, dir, "", home), /already exists/)
+    assert.match(Model.createAccountError(3, "omajop-no-such-joplin", home), /not found/)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
 })
 
 test("the create script takes every value as an argument", () => {
-  const argv = Model.createAccountArgv("/d/$(x)", "{\"a\": \"$(y)\"}", "joplin;z")
+  const argv = Model.createAccountArgv(["/d/$(x)", "/e;f"], "{\"a\": \"$(y)\"}", "joplin;z")
   assert.equal(argv[2], Model.CREATE_ACCOUNT_SCRIPT)
-  assert.deepEqual(argv.slice(4), ["/d/$(x)", "{\"a\": \"$(y)\"}", "joplin;z"])
+  assert.deepEqual(argv.slice(4), ["{\"a\": \"$(y)\"}", "joplin;z", "/d/$(x)", "/e;f"])
 })

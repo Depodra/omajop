@@ -49,10 +49,10 @@ Item {
     || nameField.activeFocus || accountNameField.activeFocus
     || serverField.activeFocus || emailField.activeFocus
 
-  // Where Add account creates the instance, and whether something is there.
-  readonly property string accountDir: Model.newAccountDir(home)
-  readonly property var accountDirInfo: infoFor(accountDir)
-  readonly property bool accountDirTaken: !!accountDirInfo && accountDirInfo.exists
+  // Where Add account would create the instance, going by the last scan: the
+  // main Joplin, else its secondary instance, else "" when both exist.
+  readonly property string accountDir: Model.newAccountDir(home, discovery.info)
+  readonly property bool accountDirTaken: accountDir === ""
 
   // A listed profile Joplin has not created its database in yet: an account
   // just added, typically. Its notes appear once Joplin has started on it.
@@ -750,25 +750,35 @@ Item {
       }
 
       Caption {
-        text: "Each Joplin profile syncs to one server, so another server gets its own "
-          + "Joplin: the secondary instance, in " + Model.contractHome(root.accountDir, root.home)
-          + ". This sets it up for the server below and starts it. Then enter your "
-          + "password in that Joplin, under Tools → Options → Synchronisation, and "
-          + "press Apply. Joplin keeps it; omajop never sees it."
+        text: {
+          var where = Model.contractHome(root.accountDir, root.home)
+          if (root.accountDirTaken)
+            return "Each Joplin profile syncs to one server, so each account gets its own Joplin."
+          var setup = Model.profileKind(root.home, root.accountDir) === Model.PROFILE_DEFAULT
+            ? "Each Joplin profile syncs to one server. Joplin has not run here yet, so "
+              + "this sets up " + Model.accountInstanceLabel(root.home, root.accountDir)
+              + ", in " + where + ", for the server below, and starts it."
+            : "Each Joplin profile syncs to one server, so another server gets its own "
+              + "Joplin: the secondary instance, in " + where + ". This sets it up for "
+              + "the server below and starts it."
+          return setup + " Then enter your password in that Joplin, under Tools → Options → "
+            + "Synchronisation, and press Apply. Joplin keeps it; omajop never sees it."
+        }
       }
 
       Caption {
         visible: root.accountDirTaken && !addColumn.succeeded
         color: Color.urgent
         text: {
-          var info = root.accountDirInfo
-          var where = Model.contractHome(root.accountDir, root.home)
-          var syncing = info && info.account.target > 0
-            ? ", set up for " + Model.accountLine(info.account) : ""
-          var listed = Model.indexOfProfile(root.profiles, root.accountDir) >= 0
-          return "Joplin's secondary instance already exists in " + where + syncing + ". "
-            + (listed ? "It is in your list; " : "Add it from Found on this computer, and ")
-            + "change its server from its page, in Joplin. Another account needs its "
+          var dirs = Model.accountDirs(root.home)
+          var listed = true
+          for (var i = 0; i < dirs.length; i++)
+            if (Model.indexOfProfile(root.profiles, dirs[i]) < 0) listed = false
+          return "Your main Joplin and its secondary instance both exist already, in "
+            + Model.contractHome(dirs[0], root.home) + " and "
+            + Model.contractHome(dirs[1], root.home) + ". "
+            + (listed ? "Both are in your list; " : "Add them from Found on this computer, and ")
+            + "change a server from its page, in Joplin. Another account needs its "
             + "own directory: start Joplin with --profile <directory>, then add that "
             + "directory to the list."
         }

@@ -430,13 +430,11 @@ BarWidget {
       accountMessage = problem
       return
     }
-    var home = Quickshell.env("HOME")
-    var dir = Model.newAccountDir(home)
     var server = Model.normalizeServerUrl(serverText)
-    pendingAccount = { name: name, dir: dir, server: server }
+    pendingAccount = { name: name, server: server }
     accountFailed = false
     accountMessage = ""
-    createProcess.command = Model.createAccountArgv(dir,
+    createProcess.command = Model.createAccountArgv(Model.accountDirs(Quickshell.env("HOME")),
       Model.newAccountSettings(server, Model.normalizeEmail(emailText)), joplinCommand)
     createProcess.running = true
   }
@@ -446,20 +444,25 @@ BarWidget {
     pendingAccount = null
     if (!account) return
     var home = Quickshell.env("HOME")
-    if (exitCode !== 0) {
+    // The script prints the directory it made: the main instance if Joplin
+    // has never run here, else alt1.
+    var dir = exitCode === 0
+      ? Model.createdAccountDir(createStdout.text, Model.accountDirs(home)) : ""
+    if (dir === "") {
       accountFailed = true
-      accountMessage = Model.createAccountError(exitCode, account.dir, joplinCommand, home)
+      accountMessage = Model.createAccountError(exitCode, joplinCommand, home)
       discoverProfiles()
       return
     }
-    saveProfiles(Model.addProfile(profiles, account.dir,
-      account.name || Model.suggestedProfileName({ dir: account.dir, kind: "",
+    saveProfiles(Model.withAccountProfile(profiles, dir,
+      account.name || Model.suggestedProfileName({ dir: dir, kind: "",
         account: Model.accountSummary({ "sync.target": 9, "sync.9.path": account.server }) })))
-    Quickshell.execDetached(Model.firstLaunchArgv(home, account.dir, joplinCommand))
+    Quickshell.execDetached(Model.firstLaunchArgv(home, dir, joplinCommand))
     accountFailed = false
-    accountMessage = "Joplin is starting for " + Model.contractHome(account.dir, home)
-      + ". Enter your password there, under Tools → Options → Synchronisation, "
-      + "then press Apply. Its notes appear here after the first sync."
+    accountMessage = "Starting " + Model.accountInstanceLabel(home, dir) + ", in "
+      + Model.contractHome(dir, home) + ". Enter your password there, under "
+      + "Tools → Options → Synchronisation, then press Apply. Its notes appear "
+      + "here after the first sync."
     discoverProfiles()
   }
 
@@ -480,7 +483,7 @@ BarWidget {
       return
     }
     // The listed profiles, and where Add account would create one.
-    var dirs = [Model.newAccountDir(Quickshell.env("HOME"))]
+    var dirs = Model.accountDirs(Quickshell.env("HOME"))
     for (var i = 0; i < profiles.length; i++) dirs.push(profiles[i].dir)
     discoverProcess.command = Model.discoveryArgv(Quickshell.env("HOME"), dirs)
     discoverProcess.running = true
@@ -671,6 +674,7 @@ BarWidget {
   Process {
     id: createProcess
     running: false
+    stdout: StdioCollector { id: createStdout; waitForEnd: true }
     onExited: function(exitCode) { root.finishCreateAccount(exitCode) }
   }
 

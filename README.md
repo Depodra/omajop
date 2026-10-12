@@ -125,21 +125,23 @@ and the username are taken from it and shown.
 #### Adding an account
 
 **Add a Joplin Server account…** takes a name, the server's address and the
-email you sign in with, and creates the second Joplin those need: the secondary
-instance in `~/.config/joplin-desktop-alt1`, with its `settings.json` already
-pointing at the server. It adds the profile to the list and starts Joplin on it
-with `--no-welcome`, so the welcome notebook is not uploaded into the account on
-the first sync; so does every start from the profile's page until Joplin has
-created its database. Then enter the password in that Joplin, under **Tools →
-Options → Synchronisation**, and press **Apply**. Once it has synced, the notes
-show up here.
+email you sign in with, and creates the Joplin instance those need, with its
+`settings.json` already pointing at the server. On a machine where Joplin has
+never run, that is the main instance in `~/.config/joplin-desktop`, the one the
+app launcher opens; after that, it is the secondary instance in
+`~/.config/joplin-desktop-alt1`. It adds the profile to the list and starts
+Joplin on it with `--no-welcome`, so the welcome notebook is not uploaded into
+the account on the first sync; so does every start from the profile's page
+until Joplin has created its database. Then enter the password in that Joplin,
+under **Tools → Options → Synchronisation**, and press **Apply**. Once it has
+synced, the notes show up here.
 
-It is always `alt1`. Joplin's own **File → Open secondary app instance** opens
-`alt1`, and when a secondary instance restarts itself, the main instance
-relaunches `alt1` whatever it was started as, so any other name would come back
-as an empty instance. If `alt1` already exists, the form says so: add it from
-the found list instead, or give a further account its own directory with
-`--profile`.
+The secondary instance is always `alt1`. Joplin's own **File → Open secondary
+app instance** opens `alt1`, and when a secondary instance restarts itself, the
+main instance relaunches `alt1` whatever it was started as, so any other name
+would come back as an empty instance. An existing directory is never written
+to: if both already exist, the form says so. Add them from the found list
+instead, or give a further account its own directory with `--profile`.
 
 The list is stored as `profiles`, which can also be written by hand. Each entry
 is a `name` and a `path`; a missing `path` means the default profile, and a bare
